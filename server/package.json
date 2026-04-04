@@ -1,0 +1,24 @@
+{
+  "name": "1cloud-server",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch index.js",
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "mysql2": "^3.9.7",
+    "jsonwebtoken": "^9.0.2",
+    "bcryptjs": "^2.4.3",
+    "nodemailer": "^6.9.13",
+    "imapflow": "^1.0.161",
+    "node-cron": "^3.0.3",
+    "@anthropic-ai/sdk": "^0.24.0",
+    "helmet": "^7.1.0",
+    "express-rate-limit": "^7.2.0"
+  }
+}
