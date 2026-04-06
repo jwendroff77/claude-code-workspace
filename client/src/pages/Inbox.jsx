@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Send,
   CalendarPlus,
@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import AgentAvatar from '../components/shared/AgentAvatar';
 import Button from '../components/shared/Button';
+import { api } from '../api/client';
 
 const agentTabs = ['All', 'Megan', 'Lauren', 'Kate', 'Scott'];
 
@@ -162,14 +163,37 @@ function SentimentBadge({ sentiment }) {
 
 export default function Inbox() {
   const [activeTab, setActiveTab] = useState('All');
+  const [inboxItems, setInboxItems] = useState(mockInbox);
   const [selectedId, setSelectedId] = useState(mockInbox[0].id);
+
+  useEffect(() => {
+    api.getInbox()
+      .then((data) => {
+        if (data && data.length > 0) {
+          setInboxItems(data);
+          setSelectedId(data[0].id);
+        }
+      })
+      .catch(() => {
+        // API failed — keep using mock data
+      });
+  }, []);
 
   const filtered =
     activeTab === 'All'
-      ? mockInbox
-      : mockInbox.filter((item) => item.agent === activeTab);
+      ? inboxItems
+      : inboxItems.filter((item) => item.agent === activeTab);
 
-  const selected = mockInbox.find((item) => item.id === selectedId);
+  const selected = inboxItems.find((item) => item.id === selectedId);
+
+  const handleAction = async (action) => {
+    if (!selected) return;
+    try {
+      await api.actionInbox(selected.id, { action });
+    } catch {
+      // Action failed silently — could add toast notification here
+    }
+  };
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -182,8 +206,8 @@ export default function Inbox() {
               setActiveTab(tab);
               const firstMatch =
                 tab === 'All'
-                  ? mockInbox[0]
-                  : mockInbox.find((i) => i.agent === tab);
+                  ? inboxItems[0]
+                  : inboxItems.find((i) => i.agent === tab);
               if (firstMatch) setSelectedId(firstMatch.id);
             }}
             className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
@@ -293,15 +317,15 @@ export default function Inbox() {
               {/* Action buttons */}
               <div className="border-t border-border px-6 py-3">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <Button variant="primary">
+                  <Button variant="primary" onClick={() => handleAction('book_appointment')}>
                     <CalendarPlus className="h-4 w-4" />
                     Book Appointment
                   </Button>
-                  <Button variant="secondary">
+                  <Button variant="secondary" onClick={() => handleAction('hand_off')}>
                     <ArrowRightLeft className="h-4 w-4" />
                     Hand off to Jonathan
                   </Button>
-                  <Button variant="danger">
+                  <Button variant="danger" onClick={() => handleAction('disqualify')}>
                     <XCircle className="h-4 w-4" />
                     Disqualify
                   </Button>

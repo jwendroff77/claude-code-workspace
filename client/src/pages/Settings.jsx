@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { api } from '../api/client';
 import {
   Key,
   Send,
@@ -111,15 +112,44 @@ function NumberInput({ value, onChange, min, max, unit }) {
 export default function Settings() {
   const [settings, setSettings] = useState(defaultSettings);
   const [saved, setSaved] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState(null); // { type: 'success' | 'error', text: string }
+
+  useEffect(() => {
+    api
+      .getSettings()
+      .then((data) => {
+        setSettings((prev) => ({ ...prev, ...data }));
+      })
+      .catch(() => {
+        // keep defaultSettings as fallback
+      })
+      .finally(() => setLoading(false));
+  }, []);
 
   const update = (key) => (e) => {
     setSettings((prev) => ({ ...prev, [key]: e.target.value }));
     setSaved(false);
+    setMessage(null);
   };
 
-  const handleSave = () => {
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
+  const handleSave = async () => {
+    setSaving(true);
+    setMessage(null);
+    try {
+      await api.updateSettings(settings);
+      setSaved(true);
+      setMessage({ type: 'success', text: 'Settings saved successfully.' });
+      setTimeout(() => {
+        setSaved(false);
+        setMessage(null);
+      }, 3000);
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message || 'Failed to save settings.' });
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -140,15 +170,42 @@ export default function Settings() {
                 Saved
               </div>
             )}
-            <Button variant="primary" onClick={handleSave}>
+            <Button variant="primary" onClick={handleSave} disabled={saving}>
               <Save className="h-4 w-4" />
-              Save Settings
+              {saving ? 'Saving...' : 'Save Settings'}
             </Button>
           </div>
         </div>
       </div>
 
-      <div className="mx-auto max-w-3xl px-6 py-8 lg:px-10">
+      {message && (
+        <div
+          className={`mx-auto mt-4 max-w-3xl px-6 lg:px-10`}
+        >
+          <div
+            className={`flex items-center gap-2 rounded-lg border px-4 py-3 text-sm ${
+              message.type === 'success'
+                ? 'border-success/20 bg-success/5 text-success'
+                : 'border-error/20 bg-error/5 text-error'
+            }`}
+          >
+            {message.type === 'success' ? (
+              <CheckCircle2 className="h-4 w-4 shrink-0" />
+            ) : (
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+            )}
+            {message.text}
+          </div>
+        </div>
+      )}
+
+      {loading && (
+        <div className="flex items-center justify-center py-20 text-sm text-txt-secondary">
+          Loading settings...
+        </div>
+      )}
+
+      <div className={`mx-auto max-w-3xl px-6 py-8 lg:px-10 ${loading ? 'opacity-50 pointer-events-none' : ''}`}>
         <div className="space-y-12">
           {/* API Keys */}
           <section>
@@ -318,9 +375,9 @@ export default function Settings() {
                 </div>
               )}
               <Button variant="ghost">Reset to Defaults</Button>
-              <Button variant="primary" onClick={handleSave}>
+              <Button variant="primary" onClick={handleSave} disabled={saving}>
                 <Save className="h-4 w-4" />
-                Save Settings
+                {saving ? 'Saving...' : 'Save Settings'}
               </Button>
             </div>
           </div>

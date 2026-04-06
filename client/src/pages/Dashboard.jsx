@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   CalendarCheck,
   Mail,
@@ -18,6 +18,7 @@ import MetricCard from '../components/shared/MetricCard';
 import StatusBadge from '../components/shared/StatusBadge';
 import AgentAvatar from '../components/shared/AgentAvatar';
 import Button from '../components/shared/Button';
+import { api } from '../api/client';
 
 const mockAgents = [
   { id: 2, name: 'Megan Barrett', title: 'SDR', email: 'megan@1cloudnow.com', status: 'active', sentToday: 47, limit: 50, replyRate: 4.2, appointmentsWeek: 3, queueSize: 234 },
@@ -116,13 +117,42 @@ function AgentCard({ agent }) {
 }
 
 export default function Dashboard() {
-  const [agents] = useState(mockAgents);
-  const [attention] = useState(mockAttention);
+  const [agents, setAgents] = useState(mockAgents);
+  const [metrics, setMetrics] = useState({
+    appointmentsBooked: 14,
+    emailsSentToday: 139,
+    replyRate: 4.9,
+    prospectsInSequence: 802,
+  });
+  const [attention, setAttention] = useState(mockAttention);
+  const [loading, setLoading] = useState(true);
 
-  const totalAppointments = agents.reduce((sum, a) => sum + a.appointmentsWeek, 0);
-  const totalSentToday = agents.reduce((sum, a) => sum + a.sentToday, 0);
-  const avgReplyRate = (agents.reduce((sum, a) => sum + a.replyRate, 0) / agents.length).toFixed(1);
-  const totalInSequence = agents.reduce((sum, a) => sum + a.queueSize, 0);
+  useEffect(() => {
+    async function fetchData() {
+      try {
+        const [metricsData, agentsData, attentionData] = await Promise.allSettled([
+          api.getDashboardMetrics(),
+          api.getDashboardAgents(),
+          api.getAttentionFeed(),
+        ]);
+        if (metricsData.status === 'fulfilled') setMetrics(metricsData.value);
+        if (agentsData.status === 'fulfilled') setAgents(agentsData.value);
+        if (attentionData.status === 'fulfilled') setAttention(attentionData.value);
+      } catch (e) {
+        // Keep mock data
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchData();
+    const interval = setInterval(fetchData, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const totalAppointments = metrics.appointmentsBooked;
+  const totalSentToday = metrics.emailsSentToday;
+  const avgReplyRate = metrics.replyRate;
+  const totalInSequence = metrics.prospectsInSequence;
 
   return (
     <div className="min-h-screen bg-bg-primary">

@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { api } from '../api/client';
 import {
   Mail,
   Reply,
@@ -75,6 +76,16 @@ function ProspectCard({ prospect }) {
 }
 
 export default function Pipeline() {
+  const [pipelineData, setPipelineData] = useState(mockPipeline);
+
+  useEffect(() => {
+    api.getPipeline()
+      .then((data) => setPipelineData(data))
+      .catch(() => {
+        // Keep mock data as fallback
+      });
+  }, []);
+
   return (
     <div className="flex flex-col h-full min-h-0">
       {/* Header */}
@@ -90,7 +101,7 @@ export default function Pipeline() {
         <div className="flex h-full min-w-max gap-4 p-5">
           {columns.map((col) => {
             const Icon = col.icon;
-            const cards = mockPipeline[col.key] || [];
+            const cards = pipelineData[col.key] || [];
             return (
               <div
                 key={col.key}

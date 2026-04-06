@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   User,
   Mail,
@@ -18,6 +18,7 @@ import {
 import AgentAvatar from '../components/shared/AgentAvatar';
 import StatusBadge from '../components/shared/StatusBadge';
 import Button from '../components/shared/Button';
+import { api } from '../api/client';
 
 const mockAgentDetails = [
   {
@@ -199,7 +200,7 @@ function DayToggle({ days }) {
   );
 }
 
-function AgentDetail({ agent }) {
+function AgentDetail({ agent, onSave, onTestSmtp, onTestImap }) {
   const isDisabled = agent.isCloser;
 
   return (
@@ -261,7 +262,7 @@ function AgentDetail({ agent }) {
             <PasswordInput value={agent.smtp.password} disabled={isDisabled} />
           </FieldGroup>
         </div>
-        <Button variant="secondary" className="text-xs" disabled={isDisabled}>
+        <Button variant="secondary" className="text-xs" disabled={isDisabled} onClick={onTestSmtp}>
           <Plug className="h-3.5 w-3.5" />
           Test SMTP Connection
         </Button>
@@ -284,7 +285,7 @@ function AgentDetail({ agent }) {
             <PasswordInput value={agent.imap.password} disabled={isDisabled} />
           </FieldGroup>
         </div>
-        <Button variant="secondary" className="text-xs" disabled={isDisabled}>
+        <Button variant="secondary" className="text-xs" disabled={isDisabled} onClick={onTestImap}>
           <Plug className="h-3.5 w-3.5" />
           Test IMAP Connection
         </Button>
@@ -329,17 +330,60 @@ function AgentDetail({ agent }) {
       {/* Save Actions */}
       <div className="flex items-center justify-end gap-3 border-t border-border pt-6">
         <Button variant="ghost">Discard Changes</Button>
-        <Button variant="primary">Save Configuration</Button>
+        <Button variant="primary" onClick={onSave}>Save Configuration</Button>
       </div>
     </div>
   );
 }
 
 export default function AgentManager() {
-  const [agents] = useState(mockAgentDetails);
-  const [selectedId, setSelectedId] = useState(agents[0].id);
+  const [agents, setAgents] = useState(mockAgentDetails);
+  const [selectedId, setSelectedId] = useState(mockAgentDetails[0].id);
+
+  useEffect(() => {
+    async function fetchAgents() {
+      try {
+        const data = await api.getAgents();
+        if (data && data.length > 0) {
+          setAgents(data);
+          setSelectedId(data[0].id);
+        }
+      } catch (e) {
+        // Keep mock data as fallback
+      }
+    }
+    fetchAgents();
+  }, []);
 
   const selectedAgent = agents.find((a) => a.id === selectedId);
+
+  async function handleSave() {
+    if (!selectedAgent) return;
+    try {
+      const updated = await api.updateAgent(selectedAgent.id, selectedAgent);
+      setAgents((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
+    } catch (e) {
+      // Save failed - could surface error to user in the future
+    }
+  }
+
+  async function handleTestSmtp() {
+    if (!selectedAgent) return;
+    try {
+      await api.testSmtp(selectedAgent.id);
+    } catch (e) {
+      // Test failed
+    }
+  }
+
+  async function handleTestImap() {
+    if (!selectedAgent) return;
+    try {
+      await api.testImap(selectedAgent.id);
+    } catch (e) {
+      // Test failed
+    }
+  }
 
   return (
     <div className="flex min-h-screen bg-bg-primary">
@@ -387,7 +431,12 @@ export default function AgentManager() {
       {/* Right Panel - Agent Detail */}
       <div className="flex-1 overflow-y-auto px-8 py-8 lg:px-12">
         {selectedAgent ? (
-          <AgentDetail agent={selectedAgent} />
+          <AgentDetail
+            agent={selectedAgent}
+            onSave={handleSave}
+            onTestSmtp={handleTestSmtp}
+            onTestImap={handleTestImap}
+          />
         ) : (
           <div className="flex h-full items-center justify-center">
             <p className="text-sm text-txt-tertiary">Select an agent to view details</p>

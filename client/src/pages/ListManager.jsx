@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { api } from '../api/client';
 import {
   Upload,
   Search,
@@ -43,11 +44,20 @@ const statusMap = {
 };
 
 export default function ListManager() {
+  const [prospects, setProspects] = useState(mockProspects);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const perPage = 10;
 
-  const filtered = mockProspects.filter(
+  useEffect(() => {
+    api.getProspects()
+      .then((data) => setProspects(data))
+      .catch(() => {
+        // Keep mock data as fallback
+      });
+  }, []);
+
+  const filtered = prospects.filter(
     (p) =>
       p.name.toLowerCase().includes(search.toLowerCase()) ||
       p.company.toLowerCase().includes(search.toLowerCase()) ||
@@ -57,9 +67,9 @@ export default function ListManager() {
   const totalPages = Math.ceil(filtered.length / perPage);
   const paged = filtered.slice((page - 1) * perPage, page * perPage);
 
-  const totalProspects = mockProspects.length;
-  const inSequence = mockProspects.filter((p) => p.status === 'active').length;
-  const available = mockProspects.filter((p) => p.status === 'draft').length;
+  const totalProspects = prospects.length;
+  const inSequence = prospects.filter((p) => p.status === 'active').length;
+  const available = prospects.filter((p) => p.status === 'draft').length;
   const excluded = mockExclusions.length;
 
   return (

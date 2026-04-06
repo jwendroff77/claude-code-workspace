@@ -1,0 +1,74 @@
+const API_BASE = '/api';
+
+async function request(path, options = {}) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+    ...options,
+  });
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(error.error || 'API request failed');
+  }
+
+  return res.json();
+}
+
+export const api = {
+  // Dashboard
+  getDashboardMetrics: () => request('/dashboard/metrics'),
+  getDashboardAgents: () => request('/dashboard/agents'),
+  getAttentionFeed: () => request('/dashboard/attention'),
+
+  // Agents
+  getAgents: () => request('/agents'),
+  getAgent: (id) => request(`/agents/${id}`),
+  updateAgent: (id, data) => request(`/agents/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  testSmtp: (id) => request(`/agents/${id}/test-smtp`, { method: 'POST' }),
+  testImap: (id) => request(`/agents/${id}/test-imap`, { method: 'POST' }),
+
+  // Prospects
+  getProspects: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return request(`/prospects?${query}`);
+  },
+  getProspect: (id) => request(`/prospects/${id}`),
+  updateProspectStatus: (id, status) => request(`/prospects/${id}/status`, { method: 'PUT', body: JSON.stringify({ status }) }),
+
+  // Sequences
+  getSequences: () => request('/sequences'),
+  getSequence: (id) => request(`/sequences/${id}`),
+  createSequence: (data) => request('/sequences', { method: 'POST', body: JSON.stringify(data) }),
+  updateSequence: (id, data) => request(`/sequences/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  addStep: (seqId, data) => request(`/sequences/${seqId}/steps`, { method: 'POST', body: JSON.stringify(data) }),
+  updateStep: (stepId, data) => request(`/sequences/steps/${stepId}`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  // Inbox
+  getInbox: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return request(`/inbox?${query}`);
+  },
+  getThread: (id) => request(`/inbox/${id}`),
+  actionInbox: (id, action) => request(`/inbox/${id}/action`, { method: 'PUT', body: JSON.stringify(action) }),
+
+  // Pipeline
+  getPipeline: () => request('/pipeline'),
+  getPipelineStats: () => request('/pipeline/stats'),
+  moveProspect: (id, data) => request(`/pipeline/${id}/move`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  // Apollo
+  searchApollo: (query) => request('/apollo/search', { method: 'POST', body: JSON.stringify(query) }),
+  importFromApollo: (data) => request('/apollo/import', { method: 'POST', body: JSON.stringify(data) }),
+  getApolloPulls: () => request('/apollo/pulls'),
+
+  // AI
+  rewriteStep: (data) => request('/ai/rewrite', { method: 'POST', body: JSON.stringify(data) }),
+  analyzeSentiment: (text) => request('/ai/sentiment', { method: 'POST', body: JSON.stringify({ text }) }),
+
+  // Settings
+  getSettings: () => request('/settings'),
+  updateSettings: (settings) => request('/settings', { method: 'PUT', body: JSON.stringify(settings) }),
+};

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Plus,
   Sparkles,
@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import StatusBadge from '../components/shared/StatusBadge';
 import Button from '../components/shared/Button';
+import { api } from '../api/client';
 
 const mockSequences = [
   {
@@ -101,7 +102,7 @@ function AiFlagIcon({ flag }) {
   return <span className="h-4 w-4 block rounded-full border border-border" />;
 }
 
-function StepCard({ step }) {
+function StepCard({ step, onRewrite }) {
   return (
     <div className="rounded-xl border border-border bg-bg-secondary p-5 space-y-4">
       {/* Header */}
@@ -157,7 +158,7 @@ function StepCard({ step }) {
             </span>
           </div>
         </div>
-        <Button variant="ghost" className="text-accent text-xs gap-1.5">
+        <Button variant="ghost" className="text-accent text-xs gap-1.5" onClick={() => onRewrite && onRewrite(step)}>
           <Sparkles className="h-3.5 w-3.5" />
           AI Rewrite
         </Button>
@@ -167,8 +168,41 @@ function StepCard({ step }) {
 }
 
 export default function CadenceBuilder() {
+  const [sequences, setSequences] = useState(mockSequences);
   const [selectedId, setSelectedId] = useState(mockSequences[0].id);
-  const selected = mockSequences.find((s) => s.id === selectedId);
+
+  useEffect(() => {
+    api.getSequences()
+      .then((data) => {
+        if (data && data.length > 0) {
+          setSequences(data);
+          setSelectedId(data[0].id);
+        }
+      })
+      .catch(() => {
+        // API failed — keep using mock data
+      });
+  }, []);
+
+  const selected = sequences.find((s) => s.id === selectedId);
+
+  const handleRewrite = async (step) => {
+    try {
+      const result = await api.rewriteStep({ stepId: step.id, subject: step.subject, body: step.body });
+      if (result) {
+        setSequences((prev) =>
+          prev.map((seq) => ({
+            ...seq,
+            steps: seq.steps.map((s) =>
+              s.id === step.id ? { ...s, ...result } : s
+            ),
+          }))
+        );
+      }
+    } catch {
+      // Rewrite failed silently
+    }
+  };
 
   return (
     <div className="flex h-full min-h-0">
@@ -179,7 +213,7 @@ export default function CadenceBuilder() {
           <p className="text-xs text-txt-tertiary mt-1">Manage your email sequences</p>
         </div>
         <div className="p-3 space-y-1">
-          {mockSequences.map((seq) => (
+          {sequences.map((seq) => (
             <button
               key={seq.id}
               onClick={() => setSelectedId(seq.id)}
@@ -256,7 +290,7 @@ export default function CadenceBuilder() {
                       <div className="h-6 w-px bg-border" />
                     </div>
                   )}
-                  <StepCard step={step} />
+                  <StepCard step={step} onRewrite={handleRewrite} />
                 </div>
               ))}
             </div>
