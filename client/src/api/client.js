@@ -37,6 +37,9 @@ export const api = {
   },
   getProspect: (id) => request(`/prospects/${id}`),
   updateProspectStatus: (id, status) => request(`/prospects/${id}/status`, { method: 'PUT', body: JSON.stringify({ status }) }),
+  getScrubQueue: (agentId) => request(`/prospects/scrub/${agentId}`),
+  bulkApproveScrub: (ids) => request('/prospects/scrub/approve', { method: 'POST', body: JSON.stringify({ prospect_ids: ids }) }),
+  bulkRejectScrub: (ids, reason) => request('/prospects/scrub/reject', { method: 'POST', body: JSON.stringify({ prospect_ids: ids, reason }) }),
 
   // Sequences
   getSequences: () => request('/sequences'),

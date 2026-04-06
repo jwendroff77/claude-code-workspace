@@ -170,4 +170,67 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// GET /scrub - get prospects pending scrub for a specific agent
+router.get('/scrub/:agentId', async (req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      `SELECT * FROM prospects
+       WHERE assigned_agent_id = ? AND status = 'pending_scrub'
+       ORDER BY company, last_name`,
+      [req.params.agentId]
+    );
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /scrub/approve - bulk approve prospects (move from pending_scrub to in_sequence)
+router.post('/scrub/approve', async (req, res) => {
+  try {
+    const { prospect_ids } = req.body;
+    if (!prospect_ids || !prospect_ids.length) {
+      return res.status(400).json({ error: 'No prospect IDs provided' });
+    }
+    const placeholders = prospect_ids.map(() => '?').join(',');
+    await pool.execute(
+      `UPDATE prospects SET status = 'in_sequence', updated_at = NOW()
+       WHERE id IN (${placeholders}) AND status = 'pending_scrub'`,
+      prospect_ids
+    );
+    res.json({ message: `${prospect_ids.length} prospects approved`, count: prospect_ids.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /scrub/reject - bulk reject/scrub prospects (remove from pipeline)
+router.post('/scrub/reject', async (req, res) => {
+  try {
+    const { prospect_ids, reason } = req.body;
+    if (!prospect_ids || !prospect_ids.length) {
+      return res.status(400).json({ error: 'No prospect IDs provided' });
+    }
+    const placeholders = prospect_ids.map(() => '?').join(',');
+    await pool.execute(
+      `UPDATE prospects SET status = 'scrubbed', updated_at = NOW()
+       WHERE id IN (${placeholders})`,
+      prospect_ids
+    );
+
+    // Log pipeline events for each
+    for (const id of prospect_ids) {
+      await pool.execute(
+        `INSERT INTO pipeline_events (prospect_id, from_status, to_status, notes)
+         VALUES (?, 'pending_scrub', 'scrubbed', ?)`,
+        [id, reason || 'Account scrub — cannot work this account']
+      );
+    }
+
+    res.json({ message: `${prospect_ids.length} prospects scrubbed`, count: prospect_ids.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS prospects (
   state VARCHAR(50),
   apollo_id VARCHAR(100),
   assigned_agent_id INT,
-  status ENUM('in_sequence', 'replied', 'engaged', 'booked', 'handed_off', 'disqualified', 'unsubscribed') DEFAULT 'in_sequence',
+  status ENUM('pending_scrub', 'in_sequence', 'replied', 'engaged', 'booked', 'handed_off', 'disqualified', 'unsubscribed', 'scrubbed') DEFAULT 'in_sequence',
   list_id INT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
