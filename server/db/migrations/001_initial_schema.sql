@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS agents (
   max_daily_pull INT DEFAULT 200,
   apollo_query_json JSON,
   status ENUM('active', 'paused') DEFAULT 'active',
-  role ENUM('closer', 'outbound') DEFAULT 'outbound',
+  role ENUM('closer', 'outbound', 'manual') DEFAULT 'outbound',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

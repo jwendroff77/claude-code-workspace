@@ -21,10 +21,12 @@ import Button from '../components/shared/Button';
 import { api } from '../api/client';
 
 const mockAgents = [
-  { id: 2, name: 'Megan Barrett', title: 'SDR', email: 'megan@1cloudnow.com', status: 'active', sentToday: 47, limit: 50, replyRate: 4.2, appointmentsWeek: 3, queueSize: 234 },
-  { id: 3, name: 'Lauren Mitchell', title: 'Senior Account Executive', email: 'lauren@1cloudnow.com', status: 'active', sentToday: 50, limit: 50, replyRate: 5.1, appointmentsWeek: 4, queueSize: 189 },
-  { id: 4, name: 'Kate Harmon', title: 'Business Development Rep', email: 'kate@1cloudnow.com', status: 'active', sentToday: 42, limit: 50, replyRate: 3.8, appointmentsWeek: 2, queueSize: 312 },
-  { id: 5, name: 'Scott Mercer', title: 'Enterprise Account Executive', email: 'scott@1cloudnow.com', status: 'paused', sentToday: 0, limit: 50, replyRate: 6.3, appointmentsWeek: 5, queueSize: 67 },
+  { id: 2, name: 'Megan Barrett', title: 'SDR', email: 'megan@1cloudnow.com', role: 'outbound', status: 'active', sentToday: 47, limit: 50, replyRate: 4.2, appointmentsWeek: 3, queueSize: 234 },
+  { id: 3, name: 'Lauren Mitchell', title: 'Senior Account Executive', email: 'lauren@1cloudnow.com', role: 'outbound', status: 'active', sentToday: 50, limit: 50, replyRate: 5.1, appointmentsWeek: 4, queueSize: 189 },
+  { id: 4, name: 'Kate Harmon', title: 'Business Development Rep', email: 'kate@1cloudnow.com', role: 'outbound', status: 'active', sentToday: 42, limit: 50, replyRate: 3.8, appointmentsWeek: 2, queueSize: 312 },
+  { id: 5, name: 'Scott Mercer', title: 'Enterprise Account Executive', email: 'scott@1cloudnow.com', role: 'outbound', status: 'paused', sentToday: 0, limit: 50, replyRate: 6.3, appointmentsWeek: 5, queueSize: 67 },
+  { id: 6, name: 'Jared Bader', title: 'EAE — Comcast Business', email: 'jared_bader@comcast.com', role: 'manual', status: 'active', sentToday: 0, limit: 0, replyRate: 0, appointmentsWeek: 0, queueSize: 0 },
+  { id: 7, name: 'Eduard Teisanu', title: 'EAE — Comcast Business', email: 'eduard_teisanu@comcast.com', role: 'manual', status: 'active', sentToday: 0, limit: 0, replyRate: 0, appointmentsWeek: 0, queueSize: 0 },
 ];
 
 const mockAttention = [
@@ -70,6 +72,8 @@ function SendProgress({ sent, limit }) {
 }
 
 function AgentCard({ agent }) {
+  const isManual = agent.role === 'manual';
+
   return (
     <div className="group rounded-xl border border-border bg-bg-secondary p-5 transition-colors hover:border-accent/30">
       {/* Header */}
@@ -81,12 +85,25 @@ function AgentCard({ agent }) {
             <p className="text-xs text-txt-tertiary">{agent.title}</p>
           </div>
         </div>
-        <StatusBadge status={agent.status} />
+        {isManual ? (
+          <span className="inline-flex items-center rounded-full bg-bg-tertiary px-2.5 py-1 text-xs font-medium text-txt-secondary">
+            Partner
+          </span>
+        ) : (
+          <StatusBadge status={agent.status} />
+        )}
       </div>
 
       {/* Stats */}
       <div className="mt-5 space-y-3">
-        <SendProgress sent={agent.sentToday} limit={agent.limit} />
+        {isManual ? (
+          <div className="rounded-lg bg-bg-primary px-3 py-3 text-center">
+            <p className="text-xs text-txt-secondary">Manual — Tracking Only</p>
+            <p className="mt-1 text-[10px] text-txt-tertiary">Activity synced via inbox monitoring</p>
+          </div>
+        ) : (
+          <SendProgress sent={agent.sentToday} limit={agent.limit} />
+        )}
 
         <div className="grid grid-cols-3 gap-3">
           <div className="rounded-lg bg-bg-primary px-3 py-2 text-center">
@@ -97,12 +114,19 @@ function AgentCard({ agent }) {
             <p className="font-mono text-lg font-bold text-accent">{agent.appointmentsWeek}</p>
             <p className="text-[10px] uppercase tracking-wider text-txt-tertiary">Appts/Wk</p>
           </div>
-          <div className="rounded-lg bg-bg-primary px-3 py-2 text-center">
-            <p className={`font-mono text-lg font-bold ${agent.queueSize < 100 ? 'text-warning' : 'text-txt-primary'}`}>
-              {agent.queueSize}
-            </p>
-            <p className="text-[10px] uppercase tracking-wider text-txt-tertiary">Queue</p>
-          </div>
+          {isManual ? (
+            <div className="rounded-lg bg-bg-primary px-3 py-2 text-center">
+              <p className="font-mono text-lg font-bold text-txt-primary">{agent.sentToday || 0}</p>
+              <p className="text-[10px] uppercase tracking-wider text-txt-tertiary">Tracked</p>
+            </div>
+          ) : (
+            <div className="rounded-lg bg-bg-primary px-3 py-2 text-center">
+              <p className={`font-mono text-lg font-bold ${agent.queueSize < 100 ? 'text-warning' : 'text-txt-primary'}`}>
+                {agent.queueSize}
+              </p>
+              <p className="text-[10px] uppercase tracking-wider text-txt-tertiary">Queue</p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -213,17 +237,35 @@ export default function Dashboard() {
           <div>
             <div className="mb-4 flex items-center justify-between">
               <h2 className="font-display text-lg font-semibold text-txt-primary">
-                Agent Roster
+                AI Agents
               </h2>
               <span className="text-xs text-txt-tertiary">
-                {agents.filter(a => a.status === 'active').length} of {agents.length} active
+                {agents.filter(a => a.role === 'outbound' && a.status === 'active').length} of {agents.filter(a => a.role === 'outbound').length} active
               </span>
             </div>
             <div className="grid gap-4 sm:grid-cols-1 lg:grid-cols-2">
-              {agents.map((agent) => (
+              {agents.filter(a => a.role !== 'manual' && a.role !== 'closer').map((agent) => (
                 <AgentCard key={agent.id} agent={agent} />
               ))}
             </div>
+
+            {agents.some(a => a.role === 'manual') && (
+              <>
+                <div className="mb-4 mt-8 flex items-center justify-between">
+                  <h2 className="font-display text-lg font-semibold text-txt-primary">
+                    Partner Agents
+                  </h2>
+                  <span className="text-xs text-txt-tertiary">
+                    {agents.filter(a => a.role === 'manual' && a.status === 'active').length} of {agents.filter(a => a.role === 'manual').length} active
+                  </span>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-1 lg:grid-cols-2">
+                  {agents.filter(a => a.role === 'manual').map((agent) => (
+                    <AgentCard key={agent.id} agent={agent} />
+                  ))}
+                </div>
+              </>
+            )}
           </div>
 
           {/* Attention Feed */}

@@ -37,7 +37,7 @@ function isSendingDay(agent) {
 
 // Process send queue for a single agent
 async function processAgentQueue(agent) {
-  if (agent.status !== 'active' || agent.role === 'closer') return;
+  if (agent.status !== 'active' || agent.role === 'closer' || agent.role === 'manual') return;
   if (!isSendingDay(agent)) return;
   if (!isInSendWindow(agent)) return;
 
