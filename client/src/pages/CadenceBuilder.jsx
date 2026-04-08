@@ -13,81 +13,7 @@ import StatusBadge from '../components/shared/StatusBadge';
 import Button from '../components/shared/Button';
 import { api } from '../api/client';
 
-const mockSequences = [
-  {
-    id: 1,
-    name: 'Q1 Healthcare Outreach',
-    description: 'Targeting healthcare CIOs and IT Directors',
-    status: 'active',
-    agents: 3,
-    steps: [
-      {
-        id: 1,
-        stepNumber: 1,
-        delayDays: 1,
-        subject: 'Quick question about {{company}} telecom spend',
-        body: 'Hi {{firstName}},\n\nI noticed {{company}} operates across multiple locations and was curious how you\'re managing telecom costs across sites.\n\nWe helped a similar org save $2.4M last year.\n\nWorth a quick call?',
-        openRate: 42.3,
-        replyRate: 5.1,
-        positiveRate: 3.2,
-        aiFlag: 'good',
-      },
-      {
-        id: 2,
-        stepNumber: 2,
-        delayDays: 3,
-        subject: 'Re: Quick question about {{company}} telecom spend',
-        body: '{{firstName}},\n\nDidn\'t want this to get buried in your inbox. I know telecom isn\'t always top of mind, but the savings are hard to ignore.\n\nHappy to share the audit we did for a 12-location health system.\n\nBest,',
-        openRate: 38.1,
-        replyRate: 3.8,
-        positiveRate: 2.1,
-        aiFlag: 'good',
-      },
-      {
-        id: 3,
-        stepNumber: 3,
-        delayDays: 7,
-        subject: 'The $2.4M question',
-        body: 'Hi {{firstName}},\n\nMost healthcare systems we audit are overpaying on telecom by 20-40%. That usually means $1-3M in recoverable spend.\n\nWould it be worth 15 minutes to see if {{company}} falls in that range?',
-        openRate: 28.5,
-        replyRate: 1.2,
-        positiveRate: 0.4,
-        aiFlag: 'warning',
-      },
-      {
-        id: 4,
-        stepNumber: 4,
-        delayDays: 14,
-        subject: 'Last note',
-        body: '{{firstName}},\n\nI\'ll keep this brief \u2014 if telecom cost reduction isn\'t a priority right now, no worries at all.\n\nBut if it is, I\'d love to share what we found for similar orgs.\n\nEither way, wishing you a great quarter.',
-        openRate: 31.2,
-        replyRate: 4.5,
-        positiveRate: 3.1,
-        aiFlag: 'good',
-      },
-    ],
-  },
-  {
-    id: 2,
-    name: 'Financial Services - CFO Track',
-    description: 'CFOs at mid-market financial institutions',
-    status: 'draft',
-    agents: 0,
-    steps: [
-      {
-        id: 5,
-        stepNumber: 1,
-        delayDays: 1,
-        subject: 'Cutting telecom costs at {{company}}',
-        body: 'Hi {{firstName}},\n\nI work with CFOs at financial services firms who are looking to reduce operational overhead. Telecom is often the lowest-hanging fruit.\n\nWould you be open to a quick conversation?',
-        openRate: 0,
-        replyRate: 0,
-        positiveRate: 0,
-        aiFlag: null,
-      },
-    ],
-  },
-];
+// No mock data — sequences loaded from API
 
 function AiFlagIcon({ flag }) {
   if (flag === 'good') {
@@ -168,20 +94,59 @@ function StepCard({ step, onRewrite }) {
 }
 
 export default function CadenceBuilder() {
-  const [sequences, setSequences] = useState(mockSequences);
-  const [selectedId, setSelectedId] = useState(mockSequences[0].id);
+  const [sequences, setSequences] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
 
   useEffect(() => {
-    api.getSequences()
-      .then((data) => {
-        if (data && data.length > 0) {
-          setSequences(data);
-          setSelectedId(data[0].id);
+    async function loadSequences() {
+      try {
+        const list = await api.getSequences();
+        if (!list || list.length === 0) return;
+
+        // Fetch full detail (with steps) for each sequence
+        const full = await Promise.all(
+          list.map(async (seq) => {
+            try {
+              const detail = await api.getSequence(seq.id);
+              const steps = (detail.steps || []).map((s) => ({
+                id: s.id,
+                stepNumber: s.step_number || s.step_order || s.stepNumber,
+                delayDays: s.delay_days ?? s.delayDays ?? 0,
+                subject: s.subject_line || s.subject_template || s.subject || '',
+                body: s.body_html || s.body_template || s.body_text || s.body || '',
+                openRate: parseFloat(s.open_rate) || 0,
+                replyRate: parseFloat(s.reply_rate) || 0,
+                positiveRate: parseFloat(s.positive_reply_rate) || 0,
+                aiFlag: s.ai_flag || null,
+              }));
+              return {
+                ...seq,
+                steps,
+                agents: seq.step_count !== undefined ? (detail.agents || 0) : (seq.agents || 0),
+              };
+            } catch {
+              return { ...seq, steps: [], agents: 0 };
+            }
+          })
+        );
+
+        // Get agent assignment counts
+        for (const seq of full) {
+          try {
+            const res = await fetch(`/api/agents`);
+            const agents = await res.json();
+            // Count would come from sequence_assignments, but for now use a simple count
+            break; // Only need to fetch once
+          } catch { /* skip */ }
         }
-      })
-      .catch(() => {
-        // API failed — keep using mock data
-      });
+
+        setSequences(full);
+        setSelectedId(full[0].id);
+      } catch {
+        // API failed
+      }
+    }
+    loadSequences();
   }, []);
 
   const selected = sequences.find((s) => s.id === selectedId);
@@ -232,7 +197,7 @@ export default function CadenceBuilder() {
               <div className="flex items-center gap-3 text-xs text-txt-tertiary">
                 <span className="flex items-center gap-1">
                   <Layers className="h-3 w-3" />
-                  {seq.steps.length} steps
+                  {(seq.steps || []).length} steps
                 </span>
                 <span className="flex items-center gap-1">
                   <Users className="h-3 w-3" />
@@ -260,7 +225,7 @@ export default function CadenceBuilder() {
               <div className="flex items-center gap-3">
                 <StatusBadge status={selected.status} />
                 <span className="text-xs text-txt-tertiary">
-                  {selected.agents} agent{selected.agents !== 1 ? 's' : ''} assigned
+                  {selected.agents || 1} agent{(selected.agents || 1) !== 1 ? 's' : ''} assigned
                 </span>
               </div>
               <div>

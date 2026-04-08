@@ -20,108 +20,7 @@ import StatusBadge from '../components/shared/StatusBadge';
 import Button from '../components/shared/Button';
 import { api } from '../api/client';
 
-const mockAgentDetails = [
-  {
-    id: 1,
-    name: 'Jonathan Wendroff',
-    title: 'Principal Advisor',
-    email: 'jonathan@1cloudnow.com',
-    status: 'active',
-    isCloser: true,
-    persona: 'Jonathan is the closer. He handles inbound replies and books appointments directly. He does not send outbound sequences.',
-    voiceProfile: 'Authoritative yet approachable. Speaks with confidence from deep telecom industry knowledge. Uses direct language, avoids fluff. References specific dollar amounts and case studies. Tone is consultative, not salesy.',
-    smtp: { host: '', port: '', username: '', password: '' },
-    imap: { host: '', port: '', username: '', password: '' },
-    params: {
-      dailySendLimit: 0,
-      sendWindowStart: '08:00',
-      sendWindowEnd: '17:00',
-      minQueueThreshold: 0,
-      maxDailyPull: 0,
-      sendingDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
-    },
-  },
-  {
-    id: 2,
-    name: 'Megan Barrett',
-    title: 'SDR',
-    email: 'megan@1cloudnow.com',
-    status: 'active',
-    isCloser: false,
-    persona: 'Megan is an energetic SDR focused on high-volume outreach to mid-market prospects. She targets IT directors and telecom managers at organizations with 5-50 locations.',
-    voiceProfile: 'Warm and personable with a slight sense of urgency. Uses short paragraphs. Leads with value and specific savings numbers. Friendly but professional. Occasionally uses a conversational aside to feel human.',
-    smtp: { host: 'smtp.google.com', port: '587', username: 'megan@1cloudnow.com', password: 'app-pwd-xxxx' },
-    imap: { host: 'imap.google.com', port: '993', username: 'megan@1cloudnow.com', password: 'app-pwd-xxxx' },
-    params: {
-      dailySendLimit: 50,
-      sendWindowStart: '08:00',
-      sendWindowEnd: '16:00',
-      minQueueThreshold: 100,
-      maxDailyPull: 25,
-      sendingDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
-    },
-  },
-  {
-    id: 3,
-    name: 'Lauren Mitchell',
-    title: 'Senior Account Executive',
-    email: 'lauren@1cloudnow.com',
-    status: 'active',
-    isCloser: false,
-    persona: 'Lauren targets senior executives at enterprise healthcare organizations. She focuses on C-suite and VP-level contacts at hospital systems and large clinics.',
-    voiceProfile: 'Polished and executive. Writes concisely with gravitas. References industry-specific pain points (telecom sprawl across hospital campuses, compliance costs). Uses questions to provoke thought rather than hard sells.',
-    smtp: { host: 'smtp.google.com', port: '587', username: 'lauren@1cloudnow.com', password: 'app-pwd-xxxx' },
-    imap: { host: 'imap.google.com', port: '993', username: 'lauren@1cloudnow.com', password: 'app-pwd-xxxx' },
-    params: {
-      dailySendLimit: 50,
-      sendWindowStart: '07:30',
-      sendWindowEnd: '16:30',
-      minQueueThreshold: 100,
-      maxDailyPull: 20,
-      sendingDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
-    },
-  },
-  {
-    id: 4,
-    name: 'Kate Harmon',
-    title: 'Business Development Rep',
-    email: 'kate@1cloudnow.com',
-    status: 'active',
-    isCloser: false,
-    persona: 'Kate focuses on financial services and insurance verticals. She prospects credit unions, community banks, and regional insurance firms for telecom cost optimization.',
-    voiceProfile: 'Straightforward and numbers-driven. Leads with ROI data and specific savings percentages. Professional but not stiff. Occasionally references local/regional context to feel personalized.',
-    smtp: { host: 'smtp.google.com', port: '587', username: 'kate@1cloudnow.com', password: 'app-pwd-xxxx' },
-    imap: { host: 'imap.google.com', port: '993', username: 'kate@1cloudnow.com', password: 'app-pwd-xxxx' },
-    params: {
-      dailySendLimit: 50,
-      sendWindowStart: '08:30',
-      sendWindowEnd: '17:00',
-      minQueueThreshold: 150,
-      maxDailyPull: 30,
-      sendingDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
-    },
-  },
-  {
-    id: 5,
-    name: 'Scott Mercer',
-    title: 'Enterprise Account Executive',
-    email: 'scott@1cloudnow.com',
-    status: 'paused',
-    isCloser: false,
-    persona: 'Scott handles enterprise accounts with 100+ locations. He targets CFOs and CIOs at large multi-site organizations across all verticals. Currently paused for queue replenishment.',
-    voiceProfile: 'Executive and strategic. Focuses on large-scale impact ($1M+ savings). Uses case study references and peer comparisons. Tone is peer-to-peer, not vendor-to-buyer. Avoids jargon in favor of business outcomes.',
-    smtp: { host: 'smtp.google.com', port: '587', username: 'scott@1cloudnow.com', password: 'app-pwd-xxxx' },
-    imap: { host: 'imap.google.com', port: '993', username: 'scott@1cloudnow.com', password: 'app-pwd-xxxx' },
-    params: {
-      dailySendLimit: 50,
-      sendWindowStart: '08:00',
-      sendWindowEnd: '16:00',
-      minQueueThreshold: 100,
-      maxDailyPull: 20,
-      sendingDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
-    },
-  },
-];
+// No mock data — agents loaded from API
 
 function FieldGroup({ label, children }) {
   return (
@@ -337,16 +236,43 @@ function AgentDetail({ agent, onSave, onTestSmtp, onTestImap }) {
 }
 
 export default function AgentManager() {
-  const [agents, setAgents] = useState(mockAgentDetails);
-  const [selectedId, setSelectedId] = useState(mockAgentDetails[0].id);
+  const [agents, setAgents] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
 
   useEffect(() => {
     async function fetchAgents() {
       try {
         const data = await api.getAgents();
         if (data && data.length > 0) {
-          setAgents(data);
-          setSelectedId(data[0].id);
+          // Map flat DB columns to the nested structure the UI expects
+          const mapped = data.map((a) => ({
+            ...a,
+            isCloser: a.role === 'closer',
+            persona: a.persona_voice || '',
+            voiceProfile: a.persona_voice || '',
+            smtp: {
+              host: a.smtp_host || '',
+              port: a.smtp_port || '',
+              username: a.smtp_user || '',
+              password: a.smtp_pass_encrypted || '',
+            },
+            imap: {
+              host: a.imap_host || '',
+              port: a.imap_port || '',
+              username: a.imap_user || '',
+              password: a.imap_pass_encrypted || '',
+            },
+            params: {
+              dailySendLimit: a.daily_send_limit || 0,
+              sendWindowStart: a.send_window_start || '08:00',
+              sendWindowEnd: a.send_window_end || '17:00',
+              minQueueThreshold: a.queue_threshold || 0,
+              maxDailyPull: a.max_daily_pull || 0,
+              sendingDays: (a.send_days || 'Mon-Fri').split('-'),
+            },
+          }));
+          setAgents(mapped);
+          setSelectedId(mapped[0].id);
         }
       } catch (e) {
         // Keep mock data as fallback

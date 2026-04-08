@@ -26,7 +26,7 @@ router.get('/:id', async (req, res) => {
     if (seqRows.length === 0) return res.status(404).json({ error: 'Sequence not found' });
 
     const [steps] = await pool.execute(
-      'SELECT * FROM sequence_steps WHERE sequence_id = ? ORDER BY step_order',
+      'SELECT * FROM sequence_steps WHERE sequence_id = ? ORDER BY step_number',
       [req.params.id]
     );
 

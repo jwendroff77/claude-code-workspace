@@ -1,7 +1,7 @@
 import clsx from 'clsx';
 
 export default function AgentAvatar({ name, status, size = 'md' }) {
-  const initials = name
+  const initials = (name || '?')
     .split(' ')
     .map((n) => n[0])
     .join('')

@@ -18,24 +18,7 @@ import StatusBadge from '../components/shared/StatusBadge';
 import AgentAvatar from '../components/shared/AgentAvatar';
 import Button from '../components/shared/Button';
 
-const mockProspects = [
-  { id: 1, name: 'David Chen', company: 'Meridian Health', title: 'CIO', email: 'dchen@meridianhealth.com', agent: 'Megan', agentStatus: 'active', status: 'active', imported: 'Mar 15, 2026' },
-  { id: 2, name: 'Sarah Kim', company: 'Apex Financial', title: 'VP of Operations', email: 'skim@apexfinancial.com', agent: 'Lauren', agentStatus: 'active', status: 'active', imported: 'Mar 15, 2026' },
-  { id: 3, name: 'Michael Torres', company: 'Summit Partners', title: 'CFO', email: 'mtorres@summitpartners.com', agent: 'Kate', agentStatus: 'active', status: 'active', imported: 'Mar 18, 2026' },
-  { id: 4, name: 'Jennifer Walsh', company: 'Northside Medical Group', title: 'IT Director', email: 'jwalsh@northsidemedical.com', agent: 'Scott', agentStatus: 'active', status: 'active', imported: 'Mar 18, 2026' },
-  { id: 5, name: 'Robert Huang', company: 'Valley Medical Center', title: 'CIO', email: 'rhuang@valleymed.org', agent: 'Lauren', agentStatus: 'active', status: 'active', imported: 'Mar 20, 2026' },
-  { id: 6, name: 'Amanda Foster', company: 'Horizon Health', title: 'VP of Technology', email: 'afoster@horizonhealth.com', agent: 'Kate', agentStatus: 'active', status: 'paused', imported: 'Mar 20, 2026' },
-  { id: 7, name: 'Brian Wright', company: 'Atlas Financial', title: 'CFO', email: 'bwright@atlasfinancial.com', agent: 'Scott', agentStatus: 'active', status: 'active', imported: 'Mar 22, 2026' },
-  { id: 8, name: 'Lisa Park', company: 'Crestview Capital', title: 'Director of Finance', email: 'lpark@crestviewcap.com', agent: 'Megan', agentStatus: 'active', status: 'active', imported: 'Mar 22, 2026' },
-  { id: 9, name: 'Carlos Mendez', company: 'Unity Healthcare', title: 'VP Operations', email: 'cmendez@unityhc.org', agent: 'Lauren', agentStatus: 'active', status: 'draft', imported: 'Mar 25, 2026' },
-  { id: 10, name: 'Nina Patel', company: 'Cornerstone Health', title: 'IT Director', email: 'npatel@cornerstonehealth.com', agent: 'Kate', agentStatus: 'active', status: 'active', imported: 'Mar 25, 2026' },
-];
-
-const mockExclusions = [
-  { id: 101, name: 'Mark Thompson', company: 'Regional Care LLC', title: 'IT Manager', email: 'mthompson@regionalcare.com', reason: 'Opted out', excludedOn: 'Mar 28, 2026' },
-  { id: 102, name: 'Diana Ruiz', company: 'Westfield Group', title: 'Controller', email: 'druiz@westfieldgroup.com', reason: 'Bad email', excludedOn: 'Mar 30, 2026' },
-  { id: 103, name: 'Paul Stevens', company: 'Lakewood Systems', title: 'CFO', email: 'pstevens@lakewood.com', reason: 'Competitor', excludedOn: 'Apr 1, 2026' },
-];
+// No mock data — prospects and exclusions loaded from API
 
 const statusMap = {
   active: 'active',
@@ -44,14 +27,26 @@ const statusMap = {
 };
 
 export default function ListManager() {
-  const [prospects, setProspects] = useState(mockProspects);
+  const [prospects, setProspects] = useState([]);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const perPage = 10;
 
   useEffect(() => {
     api.getProspects()
-      .then((data) => setProspects(data))
+      .then((res) => {
+        const rows = res.data || res;
+        if (Array.isArray(rows) && rows.length > 0) {
+          const mapped = rows.map((p) => ({
+            ...p,
+            name: `${p.first_name || ''} ${p.last_name || ''}`.trim(),
+            agent: null,
+            agentStatus: 'active',
+            imported: p.created_at ? new Date(p.created_at).toLocaleDateString() : 'Today',
+          }));
+          setProspects(mapped);
+        }
+      })
       .catch(() => {
         // Keep mock data as fallback
       });
@@ -70,7 +65,7 @@ export default function ListManager() {
   const totalProspects = prospects.length;
   const inSequence = prospects.filter((p) => p.status === 'active').length;
   const available = prospects.filter((p) => p.status === 'draft').length;
-  const excluded = mockExclusions.length;
+  const excluded = [].length;
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-y-auto">
@@ -221,7 +216,7 @@ export default function ListManager() {
             <Ban className="h-4 w-4 text-danger" />
             <h2 className="font-display text-base font-bold text-txt-primary">Exclusion List</h2>
             <span className="rounded-full bg-danger/10 px-2 py-0.5 text-xs font-mono text-danger">
-              {mockExclusions.length}
+              {[].length}
             </span>
           </div>
 
@@ -238,7 +233,7 @@ export default function ListManager() {
                 </tr>
               </thead>
               <tbody>
-                {mockExclusions.map((item) => (
+                {[].map((item) => (
                   <tr
                     key={item.id}
                     className="border-b border-border bg-bg-secondary hover:bg-bg-tertiary/50 transition-colors"

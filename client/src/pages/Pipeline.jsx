@@ -21,36 +21,14 @@ const columns = [
   { key: 'disqualified', label: 'Disqualified', icon: XCircle, accentClass: 'text-danger' },
 ];
 
-const mockPipeline = {
-  in_sequence: [
-    { id: 1, name: 'Rachel Green', title: 'VP of IT', company: 'Baystate Health', agent: 'Megan', agentStatus: 'active', daysInStage: 2, lastTouch: 'Apr 2, 2026' },
-    { id: 2, name: 'Tom Bradley', title: 'CTO', company: 'Lakewood Systems', agent: 'Lauren', agentStatus: 'active', daysInStage: 5, lastTouch: 'Mar 30, 2026' },
-    { id: 3, name: 'Nina Patel', title: 'IT Director', company: 'Cornerstone Health', agent: 'Kate', agentStatus: 'active', daysInStage: 1, lastTouch: 'Apr 3, 2026' },
-    { id: 4, name: 'Greg Olsen', title: 'CFO', company: 'Pacific Mutual', agent: 'Scott', agentStatus: 'active', daysInStage: 8, lastTouch: 'Mar 27, 2026' },
-  ],
-  replied: [
-    { id: 5, name: 'David Chen', title: 'CIO', company: 'Meridian Health', agent: 'Megan', agentStatus: 'active', daysInStage: 1, lastTouch: 'Apr 2, 2026' },
-    { id: 6, name: 'Jennifer Walsh', title: 'IT Director', company: 'Northside Medical', agent: 'Scott', agentStatus: 'active', daysInStage: 2, lastTouch: 'Apr 1, 2026' },
-    { id: 7, name: 'Carlos Mendez', title: 'VP Operations', company: 'Unity Healthcare', agent: 'Lauren', agentStatus: 'active', daysInStage: 3, lastTouch: 'Mar 31, 2026' },
-  ],
-  engaged: [
-    { id: 8, name: 'Michael Torres', title: 'CFO', company: 'Summit Partners', agent: 'Kate', agentStatus: 'active', daysInStage: 2, lastTouch: 'Apr 1, 2026' },
-    { id: 9, name: 'Lisa Park', title: 'Director of Finance', company: 'Crestview Capital', agent: 'Megan', agentStatus: 'active', daysInStage: 4, lastTouch: 'Mar 30, 2026' },
-  ],
-  appointment: [
-    { id: 10, name: 'Robert Huang', title: 'CIO', company: 'Valley Medical Center', agent: 'Lauren', agentStatus: 'active', daysInStage: 1, lastTouch: 'Apr 3, 2026' },
-    { id: 11, name: 'Amanda Foster', title: 'VP of Technology', company: 'Horizon Health', agent: 'Kate', agentStatus: 'active', daysInStage: 3, lastTouch: 'Apr 1, 2026' },
-    { id: 12, name: 'Brian Wright', title: 'CFO', company: 'Atlas Financial', agent: 'Scott', agentStatus: 'active', daysInStage: 5, lastTouch: 'Mar 29, 2026' },
-  ],
-  handed_off: [
-    { id: 13, name: 'Sandra Miller', title: 'COO', company: 'Pinnacle Health', agent: 'Megan', agentStatus: 'active', daysInStage: 2, lastTouch: 'Apr 2, 2026' },
-    { id: 14, name: 'Jason Lee', title: 'CTO', company: 'Riverbank Financial', agent: 'Lauren', agentStatus: 'active', daysInStage: 6, lastTouch: 'Mar 28, 2026' },
-  ],
-  disqualified: [
-    { id: 15, name: 'Sarah Kim', title: 'VP of Operations', company: 'Apex Financial', agent: 'Lauren', agentStatus: 'active', daysInStage: 1, lastTouch: 'Apr 2, 2026' },
-    { id: 16, name: 'Mark Thompson', title: 'IT Manager', company: 'Regional Care LLC', agent: 'Kate', agentStatus: 'active', daysInStage: 4, lastTouch: 'Mar 30, 2026' },
-    { id: 17, name: 'Diana Ruiz', title: 'Controller', company: 'Westfield Group', agent: 'Scott', agentStatus: 'active', daysInStage: 7, lastTouch: 'Mar 27, 2026' },
-  ],
+// No mock data — pipeline loaded from API
+const emptyPipeline = {
+  in_sequence: [],
+  replied: [],
+  engaged: [],
+  appointment: [],
+  handed_off: [],
+  disqualified: [],
 };
 
 function ProspectCard({ prospect }) {
@@ -76,7 +54,7 @@ function ProspectCard({ prospect }) {
 }
 
 export default function Pipeline() {
-  const [pipelineData, setPipelineData] = useState(mockPipeline);
+  const [pipelineData, setPipelineData] = useState(emptyPipeline);
 
   useEffect(() => {
     api.getPipeline()

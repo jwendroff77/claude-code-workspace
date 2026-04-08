@@ -1,6 +1,7 @@
 import { Router } from 'express';
-import nodemailer from 'nodemailer';
+import { ImapFlow } from 'imapflow';
 import pool from '../db/connection.js';
+import { testGraphConnection } from '../services/graph.js';
 
 const router = Router();
 
@@ -41,8 +42,11 @@ router.put('/:id', async (req, res) => {
 
     const mappings = {
       name, title, persona_voice,
-      smtp_host, smtp_port, smtp_user, smtp_pass, smtp_from_email,
-      imap_host, imap_port, imap_user, imap_pass,
+      smtp_host, smtp_port, smtp_user,
+      smtp_pass_encrypted: smtp_pass,
+      smtp_from_email,
+      imap_host, imap_port, imap_user,
+      imap_pass_encrypted: imap_pass,
       daily_send_limit, send_window_start, send_window_end, send_days,
       queue_threshold, max_daily_pull, apollo_query_json, status,
     };
@@ -66,27 +70,22 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// POST /:id/test-smtp - test SMTP connection
+// POST /:id/test-smtp - test email connection via Graph API
 router.post('/:id/test-smtp', async (req, res) => {
   try {
     const [rows] = await pool.execute(
-      'SELECT smtp_host, smtp_port, smtp_user, smtp_pass FROM agents WHERE id = ?',
+      'SELECT smtp_user, email FROM agents WHERE id = ?',
       [req.params.id]
     );
     if (rows.length === 0) return res.status(404).json({ error: 'Agent not found' });
 
-    const { smtp_host, smtp_port, smtp_user, smtp_pass } = rows[0];
-    if (!smtp_host) return res.status(400).json({ error: 'SMTP not configured for this agent' });
-
-    const transporter = nodemailer.createTransport({
-      host: smtp_host,
-      port: smtp_port || 587,
-      secure: smtp_port === 465,
-      auth: { user: smtp_user, pass: smtp_pass },
-    });
-
-    await transporter.verify();
-    res.json({ success: true, message: 'SMTP connection verified' });
+    const fromEmail = rows[0].smtp_user || rows[0].email;
+    const result = await testGraphConnection(fromEmail);
+    if (result.success) {
+      res.json({ success: true, message: result.message });
+    } else {
+      res.status(400).json({ success: false, error: result.message });
+    }
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
   }
@@ -96,16 +95,43 @@ router.post('/:id/test-smtp', async (req, res) => {
 router.post('/:id/test-imap', async (req, res) => {
   try {
     const [rows] = await pool.execute(
-      'SELECT imap_host, imap_port, imap_user, imap_pass FROM agents WHERE id = ?',
+      'SELECT imap_host, imap_port, imap_user, imap_pass_encrypted FROM agents WHERE id = ?',
       [req.params.id]
     );
     if (rows.length === 0) return res.status(404).json({ error: 'Agent not found' });
 
-    const { imap_host } = rows[0];
+    const { imap_host, imap_port, imap_user, imap_pass_encrypted } = rows[0];
     if (!imap_host) return res.status(400).json({ error: 'IMAP not configured for this agent' });
 
-    // TODO: implement actual IMAP connection test
-    res.json({ success: true, message: 'IMAP test placeholder - not yet implemented' });
+    const client = new ImapFlow({
+      host: imap_host,
+      port: imap_port || 993,
+      secure: true,
+      auth: { user: imap_user, pass: imap_pass_encrypted },
+      logger: false,
+    });
+
+    await client.connect();
+    await client.logout();
+    res.json({ success: true, message: 'IMAP connection verified' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /:id/sent - get sent emails for an agent from database
+router.get('/:id/sent', async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT se.id, se.agent_id, se.subject, se.body, se.sent_at,
+              p.first_name, p.last_name, p.email AS to_email, p.company
+       FROM sent_emails se
+       LEFT JOIN prospects p ON p.id = se.prospect_id
+       WHERE se.agent_id = ?
+       ORDER BY se.sent_at DESC`,
+      [req.params.id]
+    );
+    res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

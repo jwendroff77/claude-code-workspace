@@ -20,21 +20,7 @@ import AgentAvatar from '../components/shared/AgentAvatar';
 import Button from '../components/shared/Button';
 import { api } from '../api/client';
 
-const mockAgents = [
-  { id: 2, name: 'Megan Barrett', title: 'SDR', email: 'megan@1cloudnow.com', role: 'outbound', status: 'active', sentToday: 47, limit: 50, replyRate: 4.2, appointmentsWeek: 3, queueSize: 234 },
-  { id: 3, name: 'Lauren Mitchell', title: 'Senior Account Executive', email: 'lauren@1cloudnow.com', role: 'outbound', status: 'active', sentToday: 50, limit: 50, replyRate: 5.1, appointmentsWeek: 4, queueSize: 189 },
-  { id: 4, name: 'Kate Harmon', title: 'Business Development Rep', email: 'kate@1cloudnow.com', role: 'outbound', status: 'active', sentToday: 42, limit: 50, replyRate: 3.8, appointmentsWeek: 2, queueSize: 312 },
-  { id: 5, name: 'Scott Mercer', title: 'Enterprise Account Executive', email: 'scott@1cloudnow.com', role: 'outbound', status: 'paused', sentToday: 0, limit: 50, replyRate: 6.3, appointmentsWeek: 5, queueSize: 67 },
-  { id: 6, name: 'Jared Bader', title: 'EAE — Comcast Business', email: 'jared_bader@comcast.com', role: 'manual', status: 'active', sentToday: 0, limit: 0, replyRate: 0, appointmentsWeek: 0, queueSize: 0 },
-  { id: 7, name: 'Eduard Teisanu', title: 'EAE — Comcast Business', email: 'eduard_teisanu@comcast.com', role: 'manual', status: 'active', sentToday: 0, limit: 0, replyRate: 0, appointmentsWeek: 0, queueSize: 0 },
-];
-
-const mockAttention = [
-  { id: 1, type: 'reply', message: 'New reply from David Chen at Mercy Health', agent: 'Lauren Mitchell', time: '12 min ago' },
-  { id: 2, type: 'reply', message: 'Interested reply from Sarah Kim at First Federal', agent: 'Megan Barrett', time: '34 min ago' },
-  { id: 3, type: 'queue', message: "Scott's queue below threshold (67 remaining)", agent: 'Scott Mercer', time: '1 hr ago' },
-  { id: 4, type: 'performance', message: 'Step 3 underperforming in Q1 Healthcare sequence', agent: 'Kate Harmon', time: '2 hrs ago' },
-];
+// No mock data — all metrics loaded from API
 
 function attentionIcon(type) {
   switch (type) {
@@ -141,14 +127,14 @@ function AgentCard({ agent }) {
 }
 
 export default function Dashboard() {
-  const [agents, setAgents] = useState(mockAgents);
+  const [agents, setAgents] = useState([]);
   const [metrics, setMetrics] = useState({
-    appointmentsBooked: 14,
-    emailsSentToday: 139,
-    replyRate: 4.9,
-    prospectsInSequence: 802,
+    appointmentsBooked: 0,
+    emailsSentToday: 0,
+    replyRate: 0,
+    prospectsInSequence: 0,
   });
-  const [attention, setAttention] = useState(mockAttention);
+  const [attention, setAttention] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {

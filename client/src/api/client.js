@@ -29,6 +29,7 @@ export const api = {
   updateAgent: (id, data) => request(`/agents/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   testSmtp: (id) => request(`/agents/${id}/test-smtp`, { method: 'POST' }),
   testImap: (id) => request(`/agents/${id}/test-imap`, { method: 'POST' }),
+  getAgentSent: (id) => request(`/agents/${id}/sent`),
 
   // Prospects
   getProspects: (params = {}) => {

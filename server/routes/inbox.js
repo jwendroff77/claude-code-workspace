@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import pool from '../db/connection.js';
+import { sendEmail } from '../services/smtp.js';
 
 const router = Router();
 
@@ -59,7 +60,7 @@ router.get('/:id', async (req, res) => {
 
     // Get full thread: sent and received emails for this prospect
     const [sent] = await pool.execute(
-      `SELECT id, agent_id, subject, body_html, sent_at, 'sent' AS direction
+      `SELECT id, agent_id, subject, body AS body_html, sent_at, 'sent' AS direction
        FROM sent_emails
        WHERE prospect_id = ?
        ORDER BY sent_at`,
@@ -82,12 +83,13 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// PUT /:id/action - mark as actioned
+// PUT /:id/action - mark as actioned and update prospect status
 router.put('/:id/action', async (req, res) => {
   try {
     const { action_type } = req.body;
     if (!action_type) return res.status(400).json({ error: 'action_type is required' });
 
+    // Mark email as actioned
     await pool.execute(
       'UPDATE received_emails SET actioned = 1, action_type = ?, actioned_at = NOW() WHERE id = ?',
       [action_type, req.params.id]
@@ -95,7 +97,75 @@ router.put('/:id/action', async (req, res) => {
 
     const [rows] = await pool.execute('SELECT * FROM received_emails WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return res.status(404).json({ error: 'Email not found' });
-    res.json(rows[0]);
+
+    const email = rows[0];
+
+    // Update prospect status and pipeline based on action
+    if (email.prospect_id) {
+      let newStatus = null;
+
+      if (action_type === 'book_appointment') {
+        newStatus = 'booked';
+      } else if (action_type === 'hand_off') {
+        newStatus = 'handed_off';
+      } else if (action_type === 'disqualify') {
+        newStatus = 'disqualified';
+      }
+
+      if (newStatus) {
+        // Get current status for pipeline event
+        const [prospect] = await pool.execute('SELECT status FROM prospects WHERE id = ?', [email.prospect_id]);
+        const oldStatus = prospect.length > 0 ? prospect[0].status : 'replied';
+
+        // Update prospect status
+        await pool.execute(
+          'UPDATE prospects SET status = ?, updated_at = NOW() WHERE id = ?',
+          [newStatus, email.prospect_id]
+        );
+
+        // Cancel any active sequences
+        await pool.execute(
+          `UPDATE prospect_sequence_enrollment SET status = 'cancelled' WHERE prospect_id = ? AND status IN ('active', 'paused')`,
+          [email.prospect_id]
+        );
+
+        // Log pipeline event
+        await pool.execute(
+          'INSERT INTO pipeline_events (prospect_id, from_status, to_status, agent_id, notes) VALUES (?, ?, ?, ?, ?)',
+          [email.prospect_id, oldStatus, newStatus, email.agent_id, `Action: ${action_type}`]
+        );
+      }
+    }
+
+    res.json({ ...email, action_type, message: `Action '${action_type}' applied` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /:id - delete a received email from inbox
+router.delete('/:id', async (req, res) => {
+  try {
+    const [rows] = await pool.execute('SELECT id FROM received_emails WHERE id = ?', [req.params.id]);
+    if (rows.length === 0) return res.status(404).json({ error: 'Email not found' });
+
+    await pool.execute('DELETE FROM received_emails WHERE id = ?', [req.params.id]);
+    res.json({ message: 'Email deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /bulk - delete multiple emails
+router.post('/bulk-delete', async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'ids array is required' });
+    }
+    const placeholders = ids.map(() => '?').join(',');
+    await pool.execute(`DELETE FROM received_emails WHERE id IN (${placeholders})`, ids);
+    res.json({ message: `Deleted ${ids.length} email(s)` });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -115,12 +185,23 @@ router.post('/:id/reply', async (req, res) => {
 
     const original = emailRows[0];
 
-    // Insert into sent_emails as a reply
-    const [result] = await pool.execute(
-      `INSERT INTO sent_emails (agent_id, prospect_id, subject, body_html, sent_at)
-       VALUES (?, ?, ?, ?, NOW())`,
-      [original.agent_id, original.prospect_id, `Re: ${original.subject}`, body]
-    );
+    // Get the agent so we can send as them
+    const [agentRows] = await pool.execute('SELECT * FROM agents WHERE id = ?', [original.agent_id]);
+    if (agentRows.length === 0) return res.status(400).json({ error: 'Agent not found for this email' });
+    const agent = agentRows[0];
+
+    // Get the prospect's email address
+    const [prospectRows] = await pool.execute('SELECT email FROM prospects WHERE id = ?', [original.prospect_id]);
+    const toEmail = prospectRows.length > 0 ? prospectRows[0].email : original.from_email;
+
+    // Send reply via Graph API and log to sent_emails
+    const result = await sendEmail({
+      agent,
+      to: toEmail,
+      subject: `Re: ${original.subject}`,
+      html: body,
+      prospectId: original.prospect_id,
+    });
 
     // Mark original as actioned
     await pool.execute(
@@ -128,9 +209,7 @@ router.post('/:id/reply', async (req, res) => {
       [req.params.id]
     );
 
-    // TODO: actually send via SMTP service using agent's SMTP config
-
-    res.json({ message: 'Reply queued', sentEmailId: result.insertId });
+    res.json({ message: 'Reply sent', messageId: result.messageId });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -16,21 +16,12 @@ import AgentAvatar from '../components/shared/AgentAvatar';
 import Button from '../components/shared/Button';
 import { api } from '../api/client';
 
-const mockScrubProspects = [
-  { id: 101, first_name: 'Michael', last_name: 'Torres', title: 'VP of Operations', company: 'Greystar Real Estate', email: 'mtorres@greystar.com', industry: 'Property Management', city: 'Memphis', state: 'TN', company_size: '1000+' },
-  { id: 102, first_name: 'Jennifer', last_name: 'Walsh', title: 'Director of IT', company: 'CBRE Group', email: 'jwalsh@cbre.com', industry: 'Commercial Real Estate', city: 'Dallas', state: 'TX', company_size: '5000+' },
-  { id: 103, first_name: 'Carlos', last_name: 'Mendez', title: 'CFO', company: 'Lincoln Property Company', email: 'cmendez@lincolnprop.com', industry: 'Property Management', city: 'Chicago', state: 'IL', company_size: '500-1000' },
-  { id: 104, first_name: 'Amanda', last_name: 'Foster', title: 'IT Director', company: 'Prologis', email: 'afoster@prologis.com', industry: 'Logistics Real Estate', city: 'San Francisco', state: 'CA', company_size: '1000+' },
-  { id: 105, first_name: 'David', last_name: 'Chen', title: 'VP of Technology', company: 'JLL', email: 'dchen@jll.com', industry: 'Commercial Real Estate', city: 'New York', state: 'NY', company_size: '5000+' },
-  { id: 106, first_name: 'Lisa', last_name: 'Park', title: 'COO', company: 'Cushman & Wakefield', email: 'lpark@cushwake.com', industry: 'Commercial Real Estate', city: 'Atlanta', state: 'GA', company_size: '5000+' },
-  { id: 107, first_name: 'Robert', last_name: 'Huang', title: 'Director of Facilities', company: 'XPO Logistics', email: 'rhuang@xpo.com', industry: 'Logistics', city: 'Greenwich', state: 'CT', company_size: '5000+' },
-  { id: 108, first_name: 'Sandra', last_name: 'Miller', title: 'VP Operations', company: 'Schneider National', email: 'smiller@schneider.com', industry: 'Transportation', city: 'Green Bay', state: 'WI', company_size: '1000+' },
-];
+// No mock data — scrub queue loaded from API
 
 export default function AccountScrub() {
   const { agentId } = useParams();
   const navigate = useNavigate();
-  const [prospects, setProspects] = useState(mockScrubProspects);
+  const [prospects, setProspects] = useState([]);
   const [selected, setSelected] = useState(new Set());
   const [search, setSearch] = useState('');
   const [agent, setAgent] = useState(null);

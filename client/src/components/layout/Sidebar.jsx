@@ -3,11 +3,13 @@ import {
   LayoutDashboard,
   Users,
   Mail,
+  Send,
   GitBranch,
   KanbanSquare,
   ListChecks,
   Settings,
   Zap,
+  Handshake,
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -16,6 +18,8 @@ const nav = [
   { to: '/agents', icon: Users, label: 'Agent Manager' },
   { to: '/cadences', icon: GitBranch, label: 'Cadences' },
   { to: '/inbox', icon: Mail, label: 'Inbox' },
+  { to: '/sent', icon: Send, label: 'Sent Emails' },
+  { to: '/partner-cadence', icon: Handshake, label: 'Partner Cadence' },
   { to: '/pipeline', icon: KanbanSquare, label: 'Pipeline' },
   { to: '/lists', icon: ListChecks, label: 'Lists' },
   { to: '/settings', icon: Settings, label: 'Settings' },

@@ -13,6 +13,9 @@ import apolloRoutes from './routes/apollo.js';
 import aiRoutes from './routes/ai.js';
 import settingsRoutes from './routes/settings.js';
 import dashboardRoutes from './routes/dashboard.js';
+import partnerCadenceRoutes from './routes/partnerCadence.js';
+import unsubscribeRoutes from './routes/unsubscribe.js';
+import { startScheduler } from './services/scheduler.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -31,7 +34,10 @@ app.use('/api/apollo', apolloRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/partner-cadence', partnerCadenceRoutes);
+app.use('/api/unsubscribe', unsubscribeRoutes);
 
 app.listen(PORT, () => {
   console.log(`1Cloud API running on port ${PORT}`);
+  startScheduler();
 });

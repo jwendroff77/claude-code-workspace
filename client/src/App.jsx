@@ -8,6 +8,8 @@ import Pipeline from './pages/Pipeline';
 import ListManager from './pages/ListManager';
 import Settings from './pages/Settings';
 import AccountScrub from './pages/AccountScrub';
+import SentEmails from './pages/SentEmails';
+import PartnerCadence from './pages/PartnerCadence';
 
 export default function App() {
   return (
@@ -17,6 +19,8 @@ export default function App() {
         <Route path="/agents" element={<AgentManager />} />
         <Route path="/cadences" element={<CadenceBuilder />} />
         <Route path="/inbox" element={<Inbox />} />
+        <Route path="/sent" element={<SentEmails />} />
+        <Route path="/partner-cadence" element={<PartnerCadence />} />
         <Route path="/pipeline" element={<Pipeline />} />
         <Route path="/lists" element={<ListManager />} />
         <Route path="/lists/scrub/:agentId" element={<AccountScrub />} />
