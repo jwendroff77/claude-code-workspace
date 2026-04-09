@@ -23,7 +23,16 @@ function getClient() {
 
 // Send email via Microsoft Graph API as a specific agent
 // cc is optional — existing calls don't pass it and behavior is unchanged
-export async function sendMail({ fromEmail, to, cc, subject, html, text }) {
+export async function sendMail({ fromEmail, to, cc, subject, html, text, unsubscribeUrl }) {
+  // ABSOLUTE LAST DEFENSE: never send merge tags to a real person
+  if (html && html.includes('{{')) {
+    html = html.replace(/\{\{[^}]+\}\}/g, '');
+    console.log('[SAFETY] graph.js stripped merge tags before send to ' + to);
+  }
+  if (subject && subject.includes('{{')) {
+    subject = subject.replace(/\{\{[^}]+\}\}/g, '');
+  }
+
   const client = getClient();
 
   const message = {
@@ -47,6 +56,14 @@ export async function sendMail({ fromEmail, to, cc, subject, html, text }) {
     }));
   }
 
+  // List-Unsubscribe headers — required by Gmail/Microsoft for bulk senders
+  if (unsubscribeUrl) {
+    message.internetMessageHeaders = [
+      { name: 'List-Unsubscribe', value: `<${unsubscribeUrl}>` },
+      { name: 'List-Unsubscribe-Post', value: 'List-Unsubscribe=One-Click' },
+    ];
+  }
+
   const response = await client
     .api(`/users/${fromEmail}/sendMail`)
     .post({ message, saveToSentItems: true });
@@ -54,32 +71,27 @@ export async function sendMail({ fromEmail, to, cc, subject, html, text }) {
   return response;
 }
 
-// Reply in an existing thread (for partner cadence follow-ups)
-// Uses createReply to get a draft, updates the body, then sends
+// Reply-all in an existing thread (for partner cadence follow-ups + inbox replies)
+// Uses replyAll with comment field - ONLY approach that threads correctly in Outlook desktop
+// The comment field supports <br> tags for line breaks
 export async function replyToMessage({ fromEmail, messageId, html, text }) {
   const client = getClient();
 
-  // Step 1: Create a reply draft from the original message
-  const draft = await client
-    .api(`/users/${fromEmail}/messages/${messageId}/createReply`)
-    .post({});
+  // Convert HTML to comment-friendly format: strip <p> tags, convert to <br> breaks
+  let comment = html || text || '';
+  comment = comment
+    .replace(/<p>/gi, '')
+    .replace(/<\/p>/gi, '<br><br>')
+    .replace(/<br\s*\/?>\s*<br\s*\/?>\s*<br\s*\/?>/gi, '<br><br><br>')  // preserve triple breaks
+    .replace(/^\s*<br>/i, '')  // remove leading break
+    .replace(/<br>\s*$/i, '')  // remove trailing break
+    .trim();
 
-  // Step 2: Update the draft body with our content
   await client
-    .api(`/users/${fromEmail}/messages/${draft.id}`)
-    .update({
-      body: {
-        contentType: html ? 'HTML' : 'Text',
-        content: html || text,
-      },
-    });
+    .api(`/users/${fromEmail}/messages/${messageId}/replyAll`)
+    .post({ comment });
 
-  // Step 3: Send the draft
-  await client
-    .api(`/users/${fromEmail}/messages/${draft.id}/send`)
-    .post(null);
-
-  return draft;
+  return { messageId };
 }
 
 // Check an agent's INBOX for replies from a specific sender on a conversation thread

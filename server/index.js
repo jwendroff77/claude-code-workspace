@@ -1,4 +1,5 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+dotenv.config({ override: true });
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -15,6 +16,10 @@ import settingsRoutes from './routes/settings.js';
 import dashboardRoutes from './routes/dashboard.js';
 import partnerCadenceRoutes from './routes/partnerCadence.js';
 import unsubscribeRoutes from './routes/unsubscribe.js';
+import trackingRoutes from './routes/tracking.js';
+import analyticsRoutes from './routes/analytics.js';
+import abRoutes from './routes/ab.js';
+import taskRoutes from './routes/tasks.js';
 import { startScheduler } from './services/scheduler.js';
 
 const app = express();
@@ -36,6 +41,10 @@ app.use('/api/settings', settingsRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/partner-cadence', partnerCadenceRoutes);
 app.use('/api/unsubscribe', unsubscribeRoutes);
+app.use('/api/track', trackingRoutes);
+app.use('/api/analytics', analyticsRoutes);
+app.use('/api/ab', abRoutes);
+app.use('/api/tasks', taskRoutes);
 
 app.listen(PORT, () => {
   console.log(`1Cloud API running on port ${PORT}`);

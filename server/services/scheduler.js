@@ -2,6 +2,11 @@ import cron from 'node-cron';
 import pool from '../db/connection.js';
 import { sendEmail, getTodaySendCount } from './smtp.js';
 import { sendMail, getInboxByConversation, getLastSentTo, replyToMessage } from './graph.js';
+import { generatePersonalizedOpener } from './ai.js';
+import { getABVariant, recordVariantSend } from '../routes/ab.js';
+import { createLinkedInTask } from '../routes/tasks.js';
+import { recalculateAllScores } from './scoring.js';
+import { checkDomainHealth } from './domain.js';
 
 // Random delay between min and max milliseconds
 function randomDelay(minMs, maxMs) {
@@ -54,16 +59,26 @@ function isSendingDay(agent) {
   return sendDays.includes(today);
 }
 
+// Daily limit for an agent — no warmup ramp needed
+// Domain is 22 months old, emails verified via NeverBounce, proper SPF/DKIM/DMARC,
+// spaced sending (~13 min gaps), List-Unsubscribe headers, threaded conversations.
+// This is normal business sending behavior.
+function getEffectiveLimit(agent) {
+  return agent.daily_send_limit;
+}
+
 // Process send queue for a single agent — sends ONE email per tick
 async function processAgentQueue(agent) {
   if (agent.status !== 'active' || agent.role === 'closer' || agent.role === 'manual') return 0;
   if (!isSendingDay(agent)) return 0;
   if (!isInSendWindow(agent)) return 0;
 
-  const sentToday = await getTodaySendCount(agent.id);
-  if (sentToday >= agent.daily_send_limit) return 0;
+  const effectiveLimit = getEffectiveLimit(agent);
 
-  const remaining = agent.daily_send_limit - sentToday;
+  const sentToday = await getTodaySendCount(agent.id);
+  if (sentToday >= effectiveLimit) return 0;
+
+  const remaining = effectiveLimit - sentToday;
   const minsLeft = minutesLeftInWindow(agent);
 
   // Calculate ideal gap between emails for this agent
@@ -96,7 +111,8 @@ async function processAgentQueue(agent) {
   // Get enrolled prospects due for their next step
   const [enrollments] = await pool.query(
     `SELECT pse.id, pse.prospect_id, pse.sequence_id, pse.current_step,
-            p.email, p.first_name, p.last_name, p.company
+            pse.conversation_id, pse.last_message_id,
+            p.email, p.first_name, p.last_name, p.company, p.email_status
      FROM prospect_sequence_enrollment pse
      JOIN prospects p ON p.id = pse.prospect_id
      WHERE pse.agent_id = ${pool.escape(agent.id)} AND pse.status = 'active'
@@ -111,6 +127,16 @@ async function processAgentQueue(agent) {
   let sentCount = 0;
 
   for (const enrollment of enrollments) {
+    // Email verification gate: skip invalid/disposable emails
+    if (enrollment.email_status === 'invalid' || enrollment.email_status === 'disposable') {
+      await pool.execute(
+        "UPDATE prospect_sequence_enrollment SET status = 'cancelled' WHERE id = ?",
+        [enrollment.id]
+      );
+      console.log(`[Scheduler] Skipping ${enrollment.email} - email_status: ${enrollment.email_status}`);
+      continue;
+    }
+
     // Get the current step content
     const [steps] = await pool.execute(
       `SELECT * FROM sequence_steps
@@ -130,9 +156,54 @@ async function processAgentQueue(agent) {
 
     const step = steps[0];
 
+    // A/B Testing: check if this step has an active test
+    let abVariant = null;
+    let useSubject = step.subject_line;
+    let useBody = step.body_html || step.body_text;
+    try {
+      abVariant = await getABVariant(step.id);
+      if (abVariant) {
+        useSubject = abVariant.subject_line;
+        useBody = abVariant.body_html;
+      }
+    } catch (abErr) {
+      // Fall back to original step content
+    }
+
     // Personalize content
-    const subject = personalizeContent(step.subject_line, enrollment);
-    const body = personalizeContent(step.body_html || step.body_text, enrollment);
+    let subject = personalizeContent(useSubject, enrollment);
+    let body = personalizeContent(useBody, enrollment);
+
+    // AI Personalization: generate unique opener for Step 1
+    let aiOpener = null;
+    if (enrollment.current_step === 1) {
+      try {
+        // Check for cached opener first
+        const [cachedRows] = await pool.execute(
+          'SELECT personalized_opener FROM prospects WHERE id = ?',
+          [enrollment.prospect_id]
+        );
+        const cached = cachedRows[0]?.personalized_opener;
+
+        if (cached) {
+          aiOpener = cached;
+        } else {
+          aiOpener = await generatePersonalizedOpener({ prospect: enrollment, agent });
+          // Cache on prospect for re-enrollments
+          await pool.execute(
+            'UPDATE prospects SET personalized_opener = ? WHERE id = ?',
+            [aiOpener, enrollment.prospect_id]
+          );
+        }
+
+        // Replace {{aiOpener}} tag only - never prepend
+        body = body.replace(/\{\{aiOpener\}\}/g, aiOpener);
+      } catch (aiErr) {
+        console.error(`[AI] Opener failed for ${enrollment.email}:`, aiErr.message);
+        // Remove unfilled tag if AI failed
+        body = body.replace(/\{\{aiOpener\}\}/g, '');
+      }
+    }
 
     try {
       // Random delay between emails: 45-120 seconds
@@ -142,17 +213,84 @@ async function processAgentQueue(agent) {
         await randomDelay(delaySec * 1000, delaySec * 1000);
       }
 
-      await sendEmail({
-        agent,
-        to: enrollment.email,
-        subject,
-        html: body,
-        text: step.body_text ? personalizeContent(step.body_text, enrollment) : undefined,
-        prospectId: enrollment.prospect_id,
-        stepId: step.id,
-      });
+      const fromEmail = agent.smtp_user || agent.email;
+      let sendResult;
+      let threadedReply = false;
 
-      console.log(`[Scheduler] ${agent.name} -> ${enrollment.email} (step ${enrollment.current_step})`);
+      // THREADING: Steps 2+ reply in the same thread as Step 1
+      if (enrollment.current_step > 1 && enrollment.last_message_id) {
+        try {
+          await replyToMessage({ fromEmail, messageId: enrollment.last_message_id, html: body });
+          threadedReply = true;
+
+          // Log to sent_emails manually since we bypassed sendEmail()
+          const [insertResult] = await pool.execute(
+            `INSERT INTO sent_emails (prospect_id, agent_id, to_email, sequence_step_id, subject, body, sent_at)
+             VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+            [enrollment.prospect_id, agent.id, enrollment.email, step.id, subject, body]
+          );
+          sendResult = { sentEmailId: insertResult.insertId };
+
+          console.log(`[Scheduler] ${agent.name} -> ${enrollment.email} (step ${enrollment.current_step}, THREADED reply)`);
+        } catch (threadErr) {
+          console.log(`[Scheduler] Thread reply failed for ${enrollment.email}: ${threadErr.message}, sending as new email`);
+          // Fall through to normal send below
+        }
+      }
+
+      // Step 1 or thread reply failed: send as new email
+      if (!threadedReply) {
+        sendResult = await sendEmail({
+          agent,
+          to: enrollment.email,
+          subject,
+          html: body,
+          text: step.body_text ? personalizeContent(step.body_text, enrollment) : undefined,
+          prospectId: enrollment.prospect_id,
+          stepId: step.id,
+        });
+
+        if (enrollment.current_step === 1) {
+          console.log(`[Scheduler] ${agent.name} -> ${enrollment.email} (step 1, NEW thread${aiOpener ? ', AI opener' : ''}${abVariant ? `, variant ${abVariant.variant_label}` : ''})`);
+        } else {
+          console.log(`[Scheduler] ${agent.name} -> ${enrollment.email} (step ${enrollment.current_step}, standalone${abVariant ? `, variant ${abVariant.variant_label}` : ''})`);
+        }
+      }
+
+      // Store AI opener and A/B variant on the sent_email record
+      if (sendResult?.sentEmailId) {
+        const updates = [];
+        const updateParams = [];
+        if (aiOpener) { updates.push('ai_opener = ?'); updateParams.push(aiOpener); }
+        if (abVariant) { updates.push('ab_variant_id = ?'); updateParams.push(abVariant.id); }
+        if (updates.length > 0) {
+          updateParams.push(sendResult.sentEmailId);
+          await pool.execute(`UPDATE sent_emails SET ${updates.join(', ')} WHERE id = ?`, updateParams);
+        }
+        if (abVariant) {
+          try { await recordVariantSend(abVariant.id); } catch (e) { /* non-fatal */ }
+        }
+      }
+
+      // THREADING: After sending, grab the messageId from Graph for next step's reply
+      // Wait for Graph to index, then capture conversationId + messageId
+      try {
+        await randomDelay(5000, 8000); // Wait 5-8s for Graph to index
+        const lastSent = await getLastSentTo({ fromEmail, toEmail: enrollment.email });
+        if (lastSent?.id) {
+          await pool.execute(
+            'UPDATE prospect_sequence_enrollment SET conversation_id = ?, last_message_id = ? WHERE id = ?',
+            [lastSent.conversationId || null, lastSent.id, enrollment.id]
+          );
+        }
+      } catch (threadCaptureErr) {
+        console.log(`[Scheduler] Could not capture thread ID for ${enrollment.email}: ${threadCaptureErr.message}`);
+      }
+
+      // Create LinkedIn tasks at step boundaries (after Steps 2 and 4)
+      try {
+        await createLinkedInTask(enrollment.prospect_id, agent.id, enrollment.current_step);
+      } catch (e) { /* non-fatal */ }
 
       // Advance to next step
       await pool.execute(
@@ -171,11 +309,14 @@ async function processAgentQueue(agent) {
 
 function personalizeContent(content, prospect) {
   if (!content) return '';
-  return content
+  let result = content
     .replace(/\{\{firstName\}\}/g, prospect.first_name || '')
     .replace(/\{\{lastName\}\}/g, prospect.last_name || '')
     .replace(/\{\{company\}\}/g, prospect.company || '')
     .replace(/\{\{email\}\}/g, prospect.email || '');
+  // SAFETY NET: strip ANY remaining unfilled merge tags so {{anything}} never appears in sent email
+  result = result.replace(/\{\{[^}]+\}\}/g, '');
+  return result;
 }
 
 // Main scheduler
@@ -251,30 +392,146 @@ export function startScheduler() {
     }
   });
 
-  // =====================================================
-  // PARTNER CADENCE SCHEDULER — separate from direct SDR
-  // Processes partner_enrollments table only
-  // =====================================================
-  cron.schedule('*/5 * * * *', async () => {
+  // Bounce detection — every 15 minutes
+  cron.schedule('*/15 * * * *', async () => {
     try {
-      await processPartnerCadences();
+      const { checkBounces } = await import('./imap.js');
+      const [agents] = await pool.execute(
+        "SELECT * FROM agents WHERE status = 'active'"
+      );
+
+      for (const agent of agents) {
+        const bounced = await checkBounces(agent);
+        if (bounced.length > 0) {
+          console.log(`[Bounce] ${agent.name}: ${bounced.length} bounce(s) detected`);
+        }
+      }
     } catch (err) {
-      console.error('[PartnerCadence] Error:', err.message);
+      console.error('[Scheduler] Bounce check error:', err.message);
     }
   });
 
-  console.log('[Scheduler] Started — drip send (3min ticks, 1-3 per agent), IMAP poll (5min), auto-pull (1hr), partner cadence (5min)');
+  // =====================================================
+  // PARTNER CADENCE — DISABLED FROM SCHEDULER
+  // Partner cadence sends are MANUAL ONLY via /api/partner-cadence/send-next
+  // This prevents bulk blasting. Jonathan controls the pace.
+  // =====================================================
+  // DISABLED: cron.schedule('*/5 * * * *', processPartnerCadences);
+  //
+  // Partner reply detection still runs (checks for Jared's replies)
+  cron.schedule('*/5 * * * *', async () => {
+    try {
+      await checkPartnerReplies();
+    } catch (err) {
+      console.error('[PartnerCadence] Reply check error:', err.message);
+    }
+  });
+
+  // Hot prospect alerts — every 30 minutes
+  cron.schedule('*/30 * * * *', async () => {
+    try {
+      // Find prospects who opened 3+ times but haven't replied and are still in sequence
+      const [hotProspects] = await pool.query(`
+        SELECT se.prospect_id, p.first_name, p.last_name, p.company, se.agent_id,
+               MAX(se.open_count) AS max_opens, a.name AS agent_name
+        FROM sent_emails se
+        JOIN prospects p ON p.id = se.prospect_id
+        JOIN agents a ON a.id = se.agent_id
+        WHERE se.open_count >= 3
+          AND p.status = 'in_sequence'
+          AND se.sent_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+          AND NOT EXISTS (SELECT 1 FROM received_emails re WHERE re.prospect_id = se.prospect_id)
+        GROUP BY se.prospect_id
+      `);
+
+      for (const hp of hotProspects) {
+        console.log(`[HotAlert] ${hp.agent_name}: ${hp.first_name} ${hp.last_name} (${hp.company}) opened ${hp.max_opens}x - no reply yet`);
+      }
+    } catch (err) {
+      console.error('[Scheduler] Hot alert error:', err.message);
+    }
+  });
+
+  // Intent scoring — every hour
+  cron.schedule('0 * * * *', async () => {
+    try {
+      const updated = await recalculateAllScores();
+      if (updated > 0) {
+        console.log(`[Scoring] Recalculated intent scores for ${updated} prospects`);
+      }
+    } catch (err) {
+      console.error('[Scheduler] Scoring error:', err.message);
+    }
+  });
+
+  // Domain health check — daily at 7am CT (12pm UTC)
+  cron.schedule('0 12 * * *', async () => {
+    try {
+      await checkDomainHealth('1cloudnow.com');
+    } catch (err) {
+      console.error('[Scheduler] Domain health error:', err.message);
+    }
+  });
+
+  console.log('[Scheduler] Started — drip(3m), IMAP(5m), bounce(15m), hotAlerts(30m), autoPull(1h), scoring(1h), domainHealth(daily), partnerReplyCheck(5m)');
+  console.log('[Scheduler] Partner cadence SENDING is MANUAL ONLY via /api/partner-cadence/send-next');
 }
 
 // =====================================================
-// PARTNER CADENCE PROCESSING
+// PARTNER REPLY DETECTION ONLY (no sending)
+// Checks for Jared's reply-all on waiting_partner enrollments
+// =====================================================
+
+async function checkPartnerReplies() {
+  const [enrollments] = await pool.query(
+    `SELECT pe.*, p.email AS prospect_email, p.first_name, p.last_name,
+            a.name AS agent_name, a.smtp_user AS agent_smtp_user, a.email AS agent_email,
+            pa.name AS partner_name, pa.email AS partner_email
+     FROM partner_enrollments pe
+     JOIN prospects p ON p.id = pe.prospect_id
+     JOIN agents a ON a.id = pe.agent_id
+     JOIN agents pa ON pa.id = pe.partner_agent_id
+     WHERE pe.status = 'waiting_partner' AND pe.current_step = 2`
+  );
+
+  for (const enrollment of enrollments) {
+    if (!enrollment.conversation_id) continue;
+    try {
+      const agentMailbox = enrollment.agent_smtp_user || enrollment.agent_email;
+      const partnerReplies = await getInboxByConversation({
+        email: agentMailbox,
+        conversationId: enrollment.conversation_id,
+        fromEmail: enrollment.partner_email,
+      });
+
+      if (partnerReplies && partnerReplies.length > 0) {
+        const partnerMsg = partnerReplies[0];
+        await pool.execute(
+          `UPDATE partner_enrollments
+           SET current_step = 3, status = 'active',
+               partner_replied_at = ?, last_message_id = ?, updated_at = NOW()
+           WHERE id = ?`,
+          [new Date(partnerMsg.receivedDateTime), partnerMsg.id, enrollment.id]
+        );
+        console.log(`[PartnerCadence] Partner ${enrollment.partner_name} replied for ${enrollment.first_name} ${enrollment.last_name} - ready for Step 3`);
+      }
+    } catch (err) {
+      console.error(`[PartnerCadence] Reply check error: ${err.message}`);
+    }
+  }
+}
+
+// =====================================================
+// PARTNER CADENCE SENDING (exported for manual API use ONLY)
 // =====================================================
 
 async function processPartnerCadences() {
-  // Get all active partner enrollments
+  // Get all active partner enrollments — LIMIT 1 per tick for drip sending
   const [enrollments] = await pool.query(
     `SELECT pe.*, p.email AS prospect_email, p.first_name, p.last_name, p.company,
+            p.industry, p.city, p.state, p.title AS prospect_title,
             a.name AS agent_name, a.smtp_user AS agent_smtp_user, a.email AS agent_email,
+            a.persona_voice AS agent_persona,
             pa.name AS partner_name, pa.email AS partner_email,
             ps.name AS sequence_name
      FROM partner_enrollments pe
@@ -283,7 +540,8 @@ async function processPartnerCadences() {
      JOIN agents pa ON pa.id = pe.partner_agent_id
      JOIN partner_sequences ps ON ps.id = pe.sequence_id
      WHERE pe.status IN ('active', 'waiting_partner')
-     AND ps.status = 'active'`
+     AND ps.status = 'active'
+     LIMIT 1`
   );
 
   for (const enrollment of enrollments) {
@@ -333,9 +591,25 @@ async function processPartnerCadences() {
 
       // ---- STEP TYPE: agent_send_cc (Step 1) ----
       if (step.step_type === 'agent_send_cc') {
-        const subject = personalizeContent(step.subject_line, enrollment);
-        const body = personalizeContent(step.body_html, enrollment);
         const fromEmail = enrollment.agent_smtp_user || enrollment.agent_email;
+
+        // Generate AI opener for Step 1
+        let aiOpener = '';
+        try {
+          aiOpener = await generatePersonalizedOpener({
+            prospect: enrollment,
+            agent: { name: enrollment.agent_name, title: '', persona_voice: enrollment.agent_persona || '' },
+          });
+          await pool.execute('UPDATE prospects SET personalized_opener = ? WHERE id = ?', [aiOpener, enrollment.prospect_id]);
+        } catch (aiErr) {
+          console.log(`[PartnerCadence] AI opener failed for ${enrollment.prospect_email}: ${aiErr.message}`);
+        }
+
+        // Personalize content - aiOpener tag gets replaced, safety net strips any remaining tags
+        let body = step.body_html || '';
+        body = body.replace(/\{\{aiOpener\}\}/g, aiOpener);
+        body = personalizeContent(body, enrollment);
+        const subject = personalizeContent(step.subject_line, enrollment);
 
         // Random delay for natural sending
         const delaySec = Math.floor(Math.random() * 60) + 15;

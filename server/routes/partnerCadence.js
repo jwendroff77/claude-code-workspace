@@ -26,6 +26,20 @@ router.get('/', async (req, res) => {
   }
 });
 
+// GET /send-status - Check how many are pending, sent, waiting for Jared
+router.get('/send-status', async (req, res) => {
+  try {
+    const [[{ paused }]] = await pool.query("SELECT COUNT(*) AS paused FROM partner_enrollments WHERE status = 'paused' AND current_step = 1");
+    const [[{ waiting_partner }]] = await pool.query("SELECT COUNT(*) AS waiting_partner FROM partner_enrollments WHERE status = 'waiting_partner'");
+    const [[{ active }]] = await pool.query("SELECT COUNT(*) AS active FROM partner_enrollments WHERE status = 'active' AND current_step > 2");
+    const [[{ completed }]] = await pool.query("SELECT COUNT(*) AS completed FROM partner_enrollments WHERE status = 'completed'");
+    const [[{ cancelled }]] = await pool.query("SELECT COUNT(*) AS cancelled FROM partner_enrollments WHERE status = 'cancelled'");
+    res.json({ ready_to_send: paused, waiting_for_jared: waiting_partner, in_followup: active, completed, cancelled });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /:id - get partner sequence with steps
 router.get('/:id', async (req, res) => {
   try {
@@ -242,6 +256,124 @@ router.put('/enrollments/:id/cancel', async (req, res) => {
       [req.params.id]
     );
     res.json({ message: 'Enrollment cancelled' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /send-next - Send exactly ONE partner cadence email (Step 1)
+// Manual control only. Returns the email details so you can review before sending the next.
+import { sendMail, getLastSentTo } from '../services/graph.js';
+import { generatePersonalizedOpener } from '../services/ai.js';
+
+router.post('/send-next', async (req, res) => {
+  try {
+    // Get exactly 1 paused enrollment at step 1
+    const [enrollments] = await pool.query(
+      `SELECT pe.id AS enroll_id, pe.prospect_id, pe.sequence_id, pe.agent_id, pe.partner_agent_id,
+              p.email, p.first_name, p.last_name, p.company, p.industry, p.city, p.state, p.title AS prospect_title,
+              a.name AS agent_name, a.smtp_user, a.email AS agent_email, a.persona_voice,
+              pa.email AS partner_email, pa.name AS partner_name
+       FROM partner_enrollments pe
+       JOIN prospects p ON p.id = pe.prospect_id
+       JOIN agents a ON a.id = pe.agent_id
+       JOIN agents pa ON pa.id = pe.partner_agent_id
+       WHERE pe.status = 'paused' AND pe.current_step = 1
+       LIMIT 1`
+    );
+
+    if (enrollments.length === 0) {
+      return res.json({ message: 'No more prospects to send', remaining: 0 });
+    }
+
+    const e = enrollments[0];
+    const fromEmail = e.smtp_user || e.agent_email;
+
+    // Get Step 1 template
+    const [steps] = await pool.execute(
+      'SELECT * FROM partner_sequence_steps WHERE sequence_id = ? AND step_number = 1',
+      [e.sequence_id]
+    );
+    if (steps.length === 0) return res.status(400).json({ error: 'No Step 1 template found' });
+
+    // Generate AI opener
+    let aiOpener = '';
+    try {
+      aiOpener = await generatePersonalizedOpener({
+        prospect: e,
+        agent: { name: e.agent_name, title: '', persona_voice: e.persona_voice || '' },
+      });
+      await pool.execute('UPDATE prospects SET personalized_opener = ? WHERE id = ?', [aiOpener, e.prospect_id]);
+    } catch (aiErr) {
+      // AI failed - send without opener, don't block
+      console.log(`[PartnerSend] AI opener failed for ${e.email}: ${aiErr.message}`);
+    }
+
+    // Build email - replace tags, safety strip any remaining
+    let body = (steps[0].body_html || '')
+      .replace(/\{\{aiOpener\}\}/g, aiOpener)
+      .replace(/\{\{firstName\}\}/g, e.first_name || '')
+      .replace(/\{\{lastName\}\}/g, e.last_name || '')
+      .replace(/\{\{company\}\}/g, e.company || '')
+      .replace(/\{\{email\}\}/g, e.email || '')
+      .replace(/\{\{[^}]+\}\}/g, ''); // SAFETY: strip anything left
+
+    let subject = (steps[0].subject_line || 'Connecting you with {{company}}')
+      .replace(/\{\{company\}\}/g, e.company || '')
+      .replace(/\{\{[^}]+\}\}/g, '');
+
+    // Send
+    await sendMail({
+      fromEmail,
+      to: e.email,
+      cc: e.partner_email,
+      subject,
+      html: body,
+    });
+
+    // Log to sent_emails
+    await pool.execute(
+      'INSERT INTO sent_emails (prospect_id, agent_id, to_email, subject, body, ai_opener, sent_at) VALUES (?, ?, ?, ?, ?, ?, NOW())',
+      [e.prospect_id, e.agent_id, e.email, subject, body, aiOpener || null]
+    );
+
+    // Capture thread ID
+    let threadCaptured = false;
+    await new Promise(r => setTimeout(r, 6000));
+    try {
+      const lastSent = await getLastSentTo({ fromEmail, toEmail: e.email });
+      if (lastSent) {
+        await pool.execute(
+          `UPDATE partner_enrollments SET current_step = 2, status = 'waiting_partner',
+           conversation_id = ?, last_message_id = ?, updated_at = NOW() WHERE id = ?`,
+          [lastSent.conversationId || null, lastSent.id, e.enroll_id]
+        );
+        threadCaptured = true;
+      }
+    } catch (threadErr) {
+      // Advance anyway
+      await pool.execute(
+        "UPDATE partner_enrollments SET current_step = 2, status = 'waiting_partner', updated_at = NOW() WHERE id = ?",
+        [e.enroll_id]
+      );
+    }
+
+    // Count remaining
+    const [[{ remaining }]] = await pool.query(
+      "SELECT COUNT(*) AS remaining FROM partner_enrollments WHERE status = 'paused' AND current_step = 1"
+    );
+
+    res.json({
+      sent: true,
+      to: e.email,
+      prospect: `${e.first_name} ${e.last_name}`,
+      company: e.company,
+      ai_opener: aiOpener,
+      subject,
+      thread_captured: threadCaptured,
+      remaining,
+    });
+
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

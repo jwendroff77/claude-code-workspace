@@ -10,6 +10,8 @@ import {
   Settings,
   Zap,
   Handshake,
+  BarChart3,
+  CheckSquare,
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -20,7 +22,9 @@ const nav = [
   { to: '/inbox', icon: Mail, label: 'Inbox' },
   { to: '/sent', icon: Send, label: 'Sent Emails' },
   { to: '/partner-cadence', icon: Handshake, label: 'Partner Cadence' },
+  { to: '/tasks', icon: CheckSquare, label: 'Task Queue' },
   { to: '/pipeline', icon: KanbanSquare, label: 'Pipeline' },
+  { to: '/analytics', icon: BarChart3, label: 'Analytics' },
   { to: '/lists', icon: ListChecks, label: 'Lists' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];

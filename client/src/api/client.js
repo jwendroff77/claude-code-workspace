@@ -68,9 +68,40 @@ export const api = {
   importFromApollo: (data) => request('/apollo/import', { method: 'POST', body: JSON.stringify(data) }),
   getApolloPulls: () => request('/apollo/pulls'),
 
+  // Inbox AI
+  regenerateDraft: (id) => request(`/inbox/${id}/regenerate-draft`, { method: 'POST' }),
+
   // AI
   rewriteStep: (data) => request('/ai/rewrite', { method: 'POST', body: JSON.stringify(data) }),
   analyzeSentiment: (text) => request('/ai/sentiment', { method: 'POST', body: JSON.stringify({ text }) }),
+
+  // Analytics
+  getAnalyticsFunnel: (params = {}) => { const q = new URLSearchParams(params).toString(); return request(`/analytics/funnel?${q}`); },
+  getAnalyticsAgents: (params = {}) => { const q = new URLSearchParams(params).toString(); return request(`/analytics/agents?${q}`); },
+  getAnalyticsSequences: (params = {}) => { const q = new URLSearchParams(params).toString(); return request(`/analytics/sequences?${q}`); },
+  getAnalyticsTrends: (params = {}) => { const q = new URLSearchParams(params).toString(); return request(`/analytics/trends?${q}`); },
+
+  // A/B Testing
+  getABTests: () => request('/ab'),
+  createABTest: (data) => request('/ab', { method: 'POST', body: JSON.stringify(data) }),
+  promoteVariant: (testId, variantId) => request(`/ab/${testId}/promote`, { method: 'POST', body: JSON.stringify({ variant_id: variantId }) }),
+
+  // Tasks
+  getTasks: (params = {}) => { const q = new URLSearchParams(params).toString(); return request(`/tasks?${q}`); },
+  getTaskCounts: () => request('/tasks/counts'),
+  completeTask: (id) => request(`/tasks/${id}/complete`, { method: 'PUT' }),
+  skipTask: (id) => request(`/tasks/${id}/skip`, { method: 'PUT' }),
+
+  // Domain Health
+  getDomainHealth: (domain) => request(`/ai/domain-health?domain=${domain || '1cloudnow.com'}`),
+  checkDomainHealth: (domain) => request('/ai/domain-health/check', { method: 'POST', body: JSON.stringify({ domain: domain || '1cloudnow.com' }) }),
+
+  // AI Sequence Generation
+  generateSequence: (data) => request('/ai/generate-sequence', { method: 'POST', body: JSON.stringify(data) }),
+
+  // Rotation
+  getRotationRecommendation: () => request('/ai/rotation-recommendation'),
+  rotateProspects: (data) => request('/ai/rotate', { method: 'POST', body: JSON.stringify(data) }),
 
   // Settings
   getSettings: () => request('/settings'),

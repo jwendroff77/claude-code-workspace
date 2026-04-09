@@ -10,6 +10,8 @@ import Settings from './pages/Settings';
 import AccountScrub from './pages/AccountScrub';
 import SentEmails from './pages/SentEmails';
 import PartnerCadence from './pages/PartnerCadence';
+import Analytics from './pages/Analytics';
+import TaskQueue from './pages/TaskQueue';
 
 export default function App() {
   return (
@@ -22,6 +24,8 @@ export default function App() {
         <Route path="/sent" element={<SentEmails />} />
         <Route path="/partner-cadence" element={<PartnerCadence />} />
         <Route path="/pipeline" element={<Pipeline />} />
+        <Route path="/analytics" element={<Analytics />} />
+        <Route path="/tasks" element={<TaskQueue />} />
         <Route path="/lists" element={<ListManager />} />
         <Route path="/lists/scrub/:agentId" element={<AccountScrub />} />
         <Route path="/settings" element={<Settings />} />

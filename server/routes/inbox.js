@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import pool from '../db/connection.js';
 import { sendEmail } from '../services/smtp.js';
+import { replyToMessage, getLastSentTo } from '../services/graph.js';
+import { generateReplyDraft } from '../services/ai.js';
 
 const router = Router();
 
@@ -171,7 +173,58 @@ router.post('/bulk-delete', async (req, res) => {
   }
 });
 
-// POST /:id/reply - send reply as agent (placeholder for SMTP service)
+// POST /:id/regenerate-draft - regenerate AI draft reply
+router.post('/:id/regenerate-draft', async (req, res) => {
+  try {
+    const [emailRows] = await pool.execute(
+      'SELECT * FROM received_emails WHERE id = ?',
+      [req.params.id]
+    );
+    if (emailRows.length === 0) return res.status(404).json({ error: 'Email not found' });
+
+    const email = emailRows[0];
+    if (!email.prospect_id) return res.status(400).json({ error: 'No prospect linked to this email' });
+
+    // Get prospect + agent
+    const [prospectRows] = await pool.execute('SELECT * FROM prospects WHERE id = ?', [email.prospect_id]);
+    const [agentRows] = await pool.execute('SELECT * FROM agents WHERE id = ?', [email.agent_id]);
+    if (prospectRows.length === 0 || agentRows.length === 0) {
+      return res.status(400).json({ error: 'Prospect or agent not found' });
+    }
+
+    // Get thread
+    const [sentThread] = await pool.execute(
+      `SELECT id, subject, body AS body_html, sent_at, 'sent' AS direction
+       FROM sent_emails WHERE prospect_id = ? ORDER BY sent_at DESC LIMIT 3`,
+      [email.prospect_id]
+    );
+    const [recvThread] = await pool.execute(
+      `SELECT id, subject, body_text, received_at AS sent_at, 'received' AS direction
+       FROM received_emails WHERE prospect_id = ? ORDER BY received_at DESC LIMIT 3`,
+      [email.prospect_id]
+    );
+    const thread = [...sentThread, ...recvThread]
+      .sort((a, b) => new Date(a.sent_at) - new Date(b.sent_at));
+
+    const draft = await generateReplyDraft({
+      prospect: prospectRows[0],
+      agent: agentRows[0],
+      incomingEmail: email.body_text || email.body || '',
+      thread,
+    });
+
+    await pool.execute(
+      'UPDATE received_emails SET ai_draft_reply = ? WHERE id = ?',
+      [draft, req.params.id]
+    );
+
+    res.json({ ai_draft_reply: draft });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /:id/reply - send threaded reply as agent via Graph API createReply
 router.post('/:id/reply', async (req, res) => {
   try {
     const { body } = req.body;
@@ -189,19 +242,81 @@ router.post('/:id/reply', async (req, res) => {
     const [agentRows] = await pool.execute('SELECT * FROM agents WHERE id = ?', [original.agent_id]);
     if (agentRows.length === 0) return res.status(400).json({ error: 'Agent not found for this email' });
     const agent = agentRows[0];
+    const fromEmail = agent.smtp_user || agent.email;
 
     // Get the prospect's email address
     const [prospectRows] = await pool.execute('SELECT email FROM prospects WHERE id = ?', [original.prospect_id]);
     const toEmail = prospectRows.length > 0 ? prospectRows[0].email : original.from_email;
 
-    // Send reply via Graph API and log to sent_emails
-    const result = await sendEmail({
-      agent,
-      to: toEmail,
-      subject: `Re: ${original.subject}`,
-      html: body,
-      prospectId: original.prospect_id,
-    });
+    // Find the most recent message in this thread from either direction
+    // so we can reply in-thread via Graph API createReply
+    let threadSent = false;
+
+    // First try: find the prospect's reply in the agent's Graph inbox and reply to it
+    try {
+      const { Client } = await import('@microsoft/microsoft-graph-client');
+      const { ClientSecretCredential } = await import('@azure/identity');
+      const { TokenCredentialAuthenticationProvider } = await import('@microsoft/microsoft-graph-client/authProviders/azureTokenCredentials/index.js');
+
+      const credential = new ClientSecretCredential(
+        process.env.MS_TENANT_ID, process.env.MS_CLIENT_ID, process.env.MS_CLIENT_SECRET
+      );
+      const authProvider = new TokenCredentialAuthenticationProvider(credential, {
+        scopes: ['https://graph.microsoft.com/.default'],
+      });
+      const client = Client.initWithMiddleware({ authProvider });
+
+      // Search agent's inbox for the prospect's reply by subject + sender
+      const messages = await client
+        .api(`/users/${fromEmail}/mailFolders/Inbox/messages`)
+        .filter(`from/emailAddress/address eq '${toEmail}' and contains(subject, '${original.subject.replace(/'/g, "''")}')`)
+        .select('id,subject,conversationId,receivedDateTime')
+        .top(5)
+        .orderby('receivedDateTime desc')
+        .get();
+
+      if (messages.value && messages.value.length > 0) {
+        // Reply to the most recent message in the thread
+        const messageId = messages.value[0].id;
+        await replyToMessage({ fromEmail, messageId, html: body });
+        threadSent = true;
+        console.log(`[Reply] ${agent.name} -> ${toEmail} (in-thread reply to messageId ${messageId})`);
+      }
+    } catch (graphErr) {
+      console.error(`[Reply] Thread lookup failed: ${graphErr.message}`);
+    }
+
+    // Fallback: if thread reply failed, try finding our last sent message and reply to that
+    if (!threadSent) {
+      try {
+        const lastSent = await getLastSentTo({ fromEmail, toEmail });
+        if (lastSent?.id) {
+          await replyToMessage({ fromEmail, messageId: lastSent.id, html: body });
+          threadSent = true;
+          console.log(`[Reply] ${agent.name} -> ${toEmail} (in-thread reply to last sent)`);
+        }
+      } catch (fallbackErr) {
+        console.error(`[Reply] Sent-thread fallback failed: ${fallbackErr.message}`);
+      }
+    }
+
+    // Last resort: send as new email (should rarely happen)
+    if (!threadSent) {
+      console.log(`[Reply] ${agent.name} -> ${toEmail} (WARNING: sending as new email, no thread found)`);
+      await sendEmail({
+        agent, to: toEmail,
+        subject: `Re: ${original.subject}`,
+        html: body,
+        prospectId: original.prospect_id,
+      });
+    }
+
+    // Log to sent_emails
+    await pool.execute(
+      `INSERT INTO sent_emails (prospect_id, agent_id, to_email, subject, body, sent_at)
+       VALUES (?, ?, ?, ?, ?, NOW())`,
+      [original.prospect_id, agent.id, toEmail, `Re: ${original.subject}`, body]
+    );
 
     // Mark original as actioned
     await pool.execute(
@@ -209,7 +324,7 @@ router.post('/:id/reply', async (req, res) => {
       [req.params.id]
     );
 
-    res.json({ message: 'Reply sent', messageId: result.messageId });
+    res.json({ message: 'Reply sent (threaded)', threaded: threadSent });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

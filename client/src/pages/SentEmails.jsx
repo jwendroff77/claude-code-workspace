@@ -230,9 +230,20 @@ export default function SentEmails() {
                         {email.company} &middot; <span className={agentInfo.color}>{agentInfo.name.split(' ')[0]}</span>
                       </p>
                       <p className="text-xs text-txt-tertiary mt-1 truncate">{email.subject}</p>
-                      <p className="text-[11px] text-txt-tertiary mt-1 truncate opacity-60">
-                        {stripHtml(email.body).slice(0, 100)}...
-                      </p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <p className="text-[11px] text-txt-tertiary truncate opacity-60 flex-1">
+                          {stripHtml(email.body).slice(0, 100)}...
+                        </p>
+                        {email.opened_at && (
+                          <span className="flex items-center gap-1 text-[10px] text-success shrink-0">
+                            <Eye className="h-3 w-3" />
+                            {email.open_count || 1}
+                          </span>
+                        )}
+                        {email.status === 'bounced' && (
+                          <span className="text-[10px] text-danger font-medium shrink-0">Bounced</span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </button>
@@ -296,11 +307,32 @@ export default function SentEmails() {
                       />
                     </div>
 
-                    {/* Delivery status */}
-                    <div className="mt-4 flex items-center gap-2 text-xs text-success">
-                      <CheckCircle2 className="h-4 w-4" />
-                      Delivered via Microsoft Graph API
+                    {/* Delivery + tracking status */}
+                    <div className="mt-4 flex items-center gap-4">
+                      {selectedEmail.status === 'bounced' ? (
+                        <div className="flex items-center gap-2 text-xs text-danger">
+                          <CheckCircle2 className="h-4 w-4" />
+                          Bounced - email undeliverable
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 text-xs text-success">
+                          <CheckCircle2 className="h-4 w-4" />
+                          Delivered via Microsoft Graph API
+                        </div>
+                      )}
+                      {selectedEmail.opened_at && (
+                        <div className="flex items-center gap-2 text-xs text-accent">
+                          <Eye className="h-4 w-4" />
+                          Opened {selectedEmail.open_count || 1}x - first {formatTime(selectedEmail.opened_at)}
+                        </div>
+                      )}
                     </div>
+                    {selectedEmail.ai_opener && (
+                      <div className="mt-3 rounded-lg bg-accent/5 border border-accent/20 px-4 py-2">
+                        <p className="text-[11px] font-medium text-accent mb-1">AI Personalized Opener</p>
+                        <p className="text-xs text-txt-secondary">{selectedEmail.ai_opener}</p>
+                      </div>
+                    )}
                   </div>
                 </div>
               </>

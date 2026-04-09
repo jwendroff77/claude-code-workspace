@@ -10,6 +10,8 @@ import {
   RefreshCw,
   Inbox as InboxIcon,
   Trash2,
+  Sparkles,
+  RotateCcw,
 } from 'lucide-react';
 import AgentAvatar from '../components/shared/AgentAvatar';
 import Button from '../components/shared/Button';
@@ -69,6 +71,8 @@ export default function Inbox() {
   const [selectedThread, setSelectedThread] = useState(null);
   const [loading, setLoading] = useState(true);
   const [replyText, setReplyText] = useState('');
+  const [aiDraft, setAiDraft] = useState(null);
+  const [regenerating, setRegenerating] = useState(false);
 
   async function loadInbox() {
     setLoading(true);
@@ -116,6 +120,7 @@ export default function Inbox() {
   useEffect(() => {
     if (!selectedId) {
       setSelectedThread(null);
+      setAiDraft(null);
       return;
     }
     api.getThread(selectedId)
@@ -125,8 +130,21 @@ export default function Inbox() {
         } else {
           setSelectedThread([]);
         }
+        // Pre-fill reply with AI draft if available
+        if (data?.ai_draft_reply) {
+          setAiDraft(data.ai_draft_reply);
+          // Only pre-fill if reply box is empty
+          if (!replyText.trim()) {
+            setReplyText(data.ai_draft_reply);
+          }
+        } else {
+          setAiDraft(null);
+        }
       })
-      .catch(() => setSelectedThread([]));
+      .catch(() => {
+        setSelectedThread([]);
+        setAiDraft(null);
+      });
   }, [selectedId]);
 
   const filtered =
@@ -169,6 +187,21 @@ export default function Inbox() {
     } catch {
       // Delete failed
     }
+  };
+
+  const handleRegenerateDraft = async () => {
+    if (!selected || regenerating) return;
+    setRegenerating(true);
+    try {
+      const result = await api.regenerateDraft(selected.id);
+      if (result?.ai_draft_reply) {
+        setAiDraft(result.ai_draft_reply);
+        setReplyText(result.ai_draft_reply);
+      }
+    } catch {
+      // Regeneration failed
+    }
+    setRegenerating(false);
   };
 
   const handleSendReply = async () => {
@@ -378,9 +411,23 @@ export default function Inbox() {
 
               {/* Reply composer */}
               <div className="border-t border-border px-6 py-4 bg-bg-secondary">
+                {aiDraft && (
+                  <div className="flex items-center gap-2 mb-2">
+                    <Sparkles className="h-3.5 w-3.5 text-accent" />
+                    <span className="text-[11px] font-medium text-accent">AI Draft</span>
+                    <button
+                      onClick={handleRegenerateDraft}
+                      disabled={regenerating}
+                      className="flex items-center gap-1 text-[11px] text-txt-tertiary hover:text-accent transition-colors ml-auto"
+                    >
+                      <RotateCcw className={`h-3 w-3 ${regenerating ? 'animate-spin' : ''}`} />
+                      {regenerating ? 'Generating...' : 'Regenerate'}
+                    </button>
+                  </div>
+                )}
                 <div className="flex items-end gap-3">
                   <textarea
-                    rows={3}
+                    rows={4}
                     placeholder="Write a reply..."
                     value={replyText}
                     onChange={(e) => setReplyText(e.target.value)}

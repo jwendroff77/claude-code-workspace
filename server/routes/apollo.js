@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import pool from '../db/connection.js';
+import { verifyEmail } from '../services/emailVerification.js';
 
 const router = Router();
 
@@ -65,18 +66,32 @@ router.post('/import', async (req, res) => {
         continue;
       }
 
+      // Verify email before importing (if API key is set)
+      let emailStatus = null;
+      if (process.env.NEVERBOUNCE_API_KEY) {
+        const verification = await verifyEmail(p.email);
+        emailStatus = verification.result;
+
+        // Block invalid and disposable emails at import time
+        if (emailStatus === 'invalid' || emailStatus === 'disposable') {
+          duplicates.push(p.email); // Count as rejected
+          continue;
+        }
+      }
+
       const [result] = await pool.execute(
-        `INSERT INTO prospects (first_name, last_name, email, company, title, phone, linkedin_url, source)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO prospects (first_name, last_name, email, company, title, phone, linkedin_url, source, email_status, email_verified_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ${emailStatus ? 'NOW()' : 'NULL'})`,
         [
           p.first_name || null, p.last_name || null, p.email,
           p.organization_name || p.company || null,
           p.title || null, p.phone || null,
-          p.linkedin_url || null, source || 'apollo'
+          p.linkedin_url || null, source || 'apollo',
+          emailStatus,
         ]
       );
 
-      imported.push({ id: result.insertId, email: p.email });
+      imported.push({ id: result.insertId, email: p.email, email_status: emailStatus });
     }
 
     // Log the pull
@@ -92,6 +107,42 @@ router.post('/import', async (req, res) => {
       importedRecords: imported,
       duplicateEmails: duplicates
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /bulk-verify - verify all unverified prospects
+router.post('/bulk-verify', async (req, res) => {
+  try {
+    const { bulkVerify } = await import('../services/emailVerification.js');
+    // Run in background - don't block the response
+    const result = await bulkVerify({ batchSize: 100, delayMs: 500 });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /verification-stats - get email verification stats
+router.get('/verification-stats', async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT
+        email_status,
+        COUNT(*) AS count
+      FROM prospects
+      WHERE status NOT IN ('bounced', 'unsubscribed', 'disqualified')
+      GROUP BY email_status
+      ORDER BY count DESC
+    `);
+    const [[{ total }]] = await pool.query(
+      "SELECT COUNT(*) AS total FROM prospects WHERE status NOT IN ('bounced', 'unsubscribed', 'disqualified')"
+    );
+    const [[{ unverified }]] = await pool.query(
+      "SELECT COUNT(*) AS unverified FROM prospects WHERE (email_status IS NULL OR email_status = '') AND status NOT IN ('bounced', 'unsubscribed', 'disqualified')"
+    );
+    res.json({ breakdown: rows, total, unverified });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
