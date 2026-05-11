@@ -263,22 +263,33 @@ router.put('/enrollments/:id/cancel', async (req, res) => {
 
 // POST /send-next - Send exactly ONE partner cadence email (Step 1)
 // Manual control only. Returns the email details so you can review before sending the next.
-import { sendMail, getLastSentTo } from '../services/graph.js';
+import { sendMail, getLastSentTo, replyToMessage } from '../services/graph.js';
 import { generatePersonalizedOpener } from '../services/ai.js';
 
 router.post('/send-next', async (req, res) => {
+  const { bcc } = req.body || {};
   try {
     // Get exactly 1 paused enrollment at step 1
+    // Priority order:
+    // 1. Signal Intel leads (warm - have trigger event context) - highest score first
+    // 2. Cold prospects (oldest enrollment first)
     const [enrollments] = await pool.query(
       `SELECT pe.id AS enroll_id, pe.prospect_id, pe.sequence_id, pe.agent_id, pe.partner_agent_id,
               p.email, p.first_name, p.last_name, p.company, p.industry, p.city, p.state, p.title AS prospect_title,
+              p.source,
               a.name AS agent_name, a.smtp_user, a.email AS agent_email, a.persona_voice,
-              pa.email AS partner_email, pa.name AS partner_name
+              pa.email AS partner_email, pa.name AS partner_name,
+              CASE WHEN p.source LIKE '%signal-intel%' THEN 1 ELSE 0 END AS is_signal_intel,
+              COALESCE(
+                (SELECT score FROM signal_intel_leads sil WHERE sil.enrolled_prospect_id = p.id LIMIT 1),
+                0
+              ) AS signal_score
        FROM partner_enrollments pe
        JOIN prospects p ON p.id = pe.prospect_id
        JOIN agents a ON a.id = pe.agent_id
        JOIN agents pa ON pa.id = pe.partner_agent_id
        WHERE pe.status = 'paused' AND pe.current_step = 1
+       ORDER BY is_signal_intel DESC, signal_score DESC, pe.enrolled_at ASC
        LIMIT 1`
     );
 
@@ -296,17 +307,27 @@ router.post('/send-next', async (req, res) => {
     );
     if (steps.length === 0) return res.status(400).json({ error: 'No Step 1 template found' });
 
-    // Generate AI opener
+    // Generate AI opener — HARD REQUIREMENT, no send without it
     let aiOpener = '';
     try {
       aiOpener = await generatePersonalizedOpener({
         prospect: e,
         agent: { name: e.agent_name, title: '', persona_voice: e.persona_voice || '' },
       });
+      if (!aiOpener || aiOpener.length < 10) {
+        throw new Error('AI opener too short or empty');
+      }
       await pool.execute('UPDATE prospects SET personalized_opener = ? WHERE id = ?', [aiOpener, e.prospect_id]);
     } catch (aiErr) {
-      // AI failed - send without opener, don't block
-      console.log(`[PartnerSend] AI opener failed for ${e.email}: ${aiErr.message}`);
+      // Do NOT send without an AI opener. Return error so caller can retry later.
+      console.log(`[PartnerSend] AI opener failed for ${e.email}: ${aiErr.message} - skipping send`);
+      return res.status(503).json({
+        error: 'AI opener generation failed - send skipped',
+        detail: aiErr.message,
+        prospect: `${e.first_name} ${e.last_name}`,
+        company: e.company,
+        should_retry: true,
+      });
     }
 
     // Build email - replace tags, safety strip any remaining
@@ -327,6 +348,7 @@ router.post('/send-next', async (req, res) => {
       fromEmail,
       to: e.email,
       cc: e.partner_email,
+      bcc: bcc || undefined,
       subject,
       html: body,
     });
@@ -374,6 +396,122 @@ router.post('/send-next', async (req, res) => {
       remaining,
     });
 
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /flush-followups - Bulk-send all overdue agent_followup steps for a given partner
+// Use when follow-ups have fallen behind and need to catch up immediately.
+// Body: { partner_agent_id: number, dry_run?: boolean }
+router.post('/flush-followups', async (req, res) => {
+  const { partner_agent_id, dry_run = false } = req.body;
+  if (!partner_agent_id) return res.status(400).json({ error: 'partner_agent_id required' });
+
+  try {
+    const [enrollments] = await pool.query(
+      `SELECT pe.*, p.email AS prospect_email, p.first_name, p.last_name, p.company,
+              p.industry, p.city, p.state, p.title AS prospect_title,
+              a.name AS agent_name, a.smtp_user AS agent_smtp_user, a.email AS agent_email,
+              pa.name AS partner_name, pa.email AS partner_email,
+              pss.body_html AS step_body, pss.subject_line AS step_subject, pss.delay_days
+       FROM partner_enrollments pe
+       JOIN prospects p ON p.id = pe.prospect_id
+       JOIN agents a ON a.id = pe.agent_id
+       JOIN agents pa ON pa.id = pe.partner_agent_id
+       JOIN partner_sequences ps ON ps.id = pe.sequence_id
+       JOIN partner_sequence_steps pss ON pss.sequence_id = pe.sequence_id AND pss.step_number = pe.current_step
+       WHERE pe.partner_agent_id = ?
+         AND pe.status = 'active'
+         AND pss.step_type = 'agent_followup'
+         AND pe.partner_replied_at IS NOT NULL
+         AND TIMESTAMPDIFF(DAY, pe.partner_replied_at, NOW()) >= pss.delay_days
+       ORDER BY pe.partner_replied_at ASC`,
+      [partner_agent_id]
+    );
+
+    if (enrollments.length === 0) {
+      return res.json({ message: 'No overdue follow-ups found', sent: 0 });
+    }
+
+    if (dry_run) {
+      return res.json({
+        dry_run: true,
+        count: enrollments.length,
+        prospects: enrollments.map(e => ({
+          name: `${e.first_name} ${e.last_name}`,
+          company: e.company,
+          email: e.prospect_email,
+          step: e.current_step,
+          days_overdue: Math.floor((Date.now() - new Date(e.partner_replied_at).getTime()) / (1000 * 60 * 60 * 24)) - e.delay_days,
+        })),
+      });
+    }
+
+    const results = [];
+    for (const e of enrollments) {
+      try {
+        const fromEmail = e.agent_smtp_user || e.agent_email;
+
+        // Replace merge tags
+        const body = (e.step_body || '')
+          .replace(/\{\{firstName\}\}/g, e.first_name || '')
+          .replace(/\{\{lastName\}\}/g, e.last_name || '')
+          .replace(/\{\{company\}\}/g, e.company || '')
+          .replace(/\{\{[^}]+\}\}/g, '');
+
+        // Send in-thread if we have a message ID, otherwise standalone CC'ing partner
+        let sendMethod = 'standalone';
+        if (e.last_message_id) {
+          try {
+            await replyToMessage({ fromEmail, messageId: e.last_message_id, html: body });
+            sendMethod = 'in-thread';
+          } catch (replyErr) {
+            console.log(`[FlushFollowups] Thread reply failed (${replyErr.message}), sending standalone CC partner`);
+            const subject = `Re: ${e.partner_name} intro - ${e.company}`;
+            await sendMail({ fromEmail, to: e.prospect_email, cc: e.partner_email, subject, html: body });
+          }
+        } else {
+          const subject = `Re: ${e.partner_name} intro - ${e.company}`;
+          await sendMail({ fromEmail, to: e.prospect_email, cc: e.partner_email, subject, html: body });
+        }
+
+        await pool.execute(
+          `INSERT INTO sent_emails (prospect_id, agent_id, subject, body, sent_at)
+           VALUES (?, ?, ?, ?, NOW())`,
+          [e.prospect_id, e.agent_id, `Partner cadence Step ${e.current_step}`, body]
+        );
+
+        // Capture new message ID for thread continuity — non-fatal if it fails
+        await new Promise(r => setTimeout(r, 6000));
+        let lastSentId = e.last_message_id;
+        try {
+          const lastSent = await getLastSentTo({ fromEmail, toEmail: e.prospect_email });
+          if (lastSent?.id) lastSentId = lastSent.id;
+        } catch (graphErr) {
+          console.log(`[FlushFollowups] getLastSentTo failed (${graphErr.message}) - keeping existing message ID`);
+        }
+
+        await pool.execute(
+          `UPDATE partner_enrollments SET current_step = ?, last_message_id = ?, updated_at = NOW() WHERE id = ?`,
+          [e.current_step + 1, lastSentId, e.id]
+        );
+
+        console.log(`[FlushFollowups] Sent Step ${e.current_step} to ${e.first_name} ${e.last_name} (${e.company}) [${sendMethod}]`);
+        results.push({ sent: true, prospect: `${e.first_name} ${e.last_name}`, company: e.company, step: e.current_step, method: sendMethod });
+
+        // Random 3-4 min gap between sends — one email per rep per ~3-4 min
+        if (enrollments.indexOf(e) < enrollments.length - 1) {
+          const delay = (Math.random() * 60 + 180) * 1000; // 180-240s
+          await new Promise(r => setTimeout(r, delay));
+        }
+      } catch (err) {
+        console.error(`[FlushFollowups] Failed for ${e.prospect_email}: ${err.message}`);
+        results.push({ sent: false, prospect: `${e.first_name} ${e.last_name}`, company: e.company, error: err.message });
+      }
+    }
+
+    res.json({ sent: results.filter(r => r.sent).length, failed: results.filter(r => !r.sent).length, results });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

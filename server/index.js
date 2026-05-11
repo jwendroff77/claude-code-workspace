@@ -1,5 +1,9 @@
 import dotenv from 'dotenv';
-dotenv.config({ override: true });
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import fs from 'fs';
+const __dirname = dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: join(__dirname, '..', '.env'), override: true });
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -20,6 +24,7 @@ import trackingRoutes from './routes/tracking.js';
 import analyticsRoutes from './routes/analytics.js';
 import abRoutes from './routes/ab.js';
 import taskRoutes from './routes/tasks.js';
+import signalIntelRoutes from './routes/signalIntel.js';
 import { startScheduler } from './services/scheduler.js';
 
 const app = express();
@@ -45,8 +50,21 @@ app.use('/api/track', trackingRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/ab', abRoutes);
 app.use('/api/tasks', taskRoutes);
+app.use('/api/signal-intel', signalIntelRoutes);
+
+// Serve React build in production
+const clientDist = join(__dirname, '..', 'client', 'dist');
+if (fs.existsSync(clientDist)) {
+  app.use(express.static(clientDist));
+  app.get('*', (req, res) => {
+    if (!req.path.startsWith('/api')) {
+      res.sendFile(join(clientDist, 'index.html'));
+    }
+  });
+}
 
 app.listen(PORT, () => {
   console.log(`1Cloud API running on port ${PORT}`);
+  console.log(`[STARTUP] PID: ${process.pid}`);
   startScheduler();
 });

@@ -12,6 +12,7 @@ import SentEmails from './pages/SentEmails';
 import PartnerCadence from './pages/PartnerCadence';
 import Analytics from './pages/Analytics';
 import TaskQueue from './pages/TaskQueue';
+import SignalIntel from './pages/SignalIntel';
 
 export default function App() {
   return (
@@ -24,6 +25,7 @@ export default function App() {
         <Route path="/sent" element={<SentEmails />} />
         <Route path="/partner-cadence" element={<PartnerCadence />} />
         <Route path="/pipeline" element={<Pipeline />} />
+        <Route path="/signal-intel" element={<SignalIntel />} />
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/tasks" element={<TaskQueue />} />
         <Route path="/lists" element={<ListManager />} />

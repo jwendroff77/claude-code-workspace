@@ -17,6 +17,7 @@
   "dependencies": {
     "@azure/identity": "^4.13.1",
     "@microsoft/microsoft-graph-client": "^3.0.7",
-    "docx": "^9.6.1"
+    "docx": "^9.6.1",
+    "exceljs": "^4.4.0"
   }
 }

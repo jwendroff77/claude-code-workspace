@@ -4,8 +4,10 @@ import pool from '../db/connection.js';
 let client = null;
 
 function getClient() {
-  if (!client) {
-    client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!client || !key) {
+    if (!key) console.error('[AI] WARNING: ANTHROPIC_API_KEY is not set in environment');
+    client = new Anthropic({ apiKey: key });
   }
   return client;
 }
@@ -54,13 +56,60 @@ Generate an improved version that maintains the agent's voice while improving en
 }
 
 // Generate a personalized opening line for a prospect (Step 1 only)
+// Retries up to 5 times on Anthropic overload/rate-limit errors with exponential backoff
+// If prospect.signal_intel_trigger is set, the opener references the actual news event
 export async function generatePersonalizedOpener({ prospect, agent }) {
   const anthropic = getClient();
 
-  const message = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 200,
-    system: `${BRAND_VOICE}
+  // Detect Signal Intel trigger context
+  let signalContext = null;
+  // Check dedicated columns first (new format)
+  if (prospect.signal_trigger_type && prospect.signal_headline) {
+    signalContext = { triggerType: prospect.signal_trigger_type, headline: prospect.signal_headline };
+  }
+  // Fall back to parsing source field (old format)
+  else if (prospect.source && prospect.source.includes('SIGNAL INTEL')) {
+    const triggerMatch = prospect.source.match(/Trigger:\s*([^|]+)\s*\|\s*([^|]+)/);
+    if (triggerMatch) {
+      signalContext = { triggerType: triggerMatch[1].trim(), headline: triggerMatch[2].trim() };
+    }
+  }
+
+  let systemPrompt;
+  let userPrompt;
+
+  if (signalContext) {
+    // SIGNAL INTEL VERSION - reference the actual news event
+    systemPrompt = `${BRAND_VOICE}
+
+You are writing as ${agent.name}, ${agent.title}.
+Persona: ${agent.persona_voice || 'Professional and direct.'}
+
+STRICT RULES:
+- Write exactly ONE short sentence - 10 to 15 words max.  Be brief.
+- Reference the news event quickly - do NOT repeat the full headline
+- Never use em dashes - use single dashes instead
+- Do not include a greeting - that's handled separately
+- Do not include a signature or CTA - just the hook
+- Examples of the RIGHT length:
+  - "Saw the Vivaldi acquisition - merging networks is where costs hide."
+  - "Congrats on the new Phoenix facility - new sites mean new circuits."
+  - "Read about your HQ move - great time to renegotiate connectivity."`;
+
+    userPrompt = `Write a personalized opening line for this prospect that references the news event:
+
+Prospect: ${prospect.first_name} ${prospect.last_name}, ${prospect.title || ''} at ${prospect.company || ''}
+Industry: ${prospect.industry || 'Unknown'}
+Location: ${prospect.city || ''}${prospect.city && prospect.state ? ', ' : ''}${prospect.state || ''}
+
+NEWS EVENT (reference this naturally):
+Type: ${signalContext.triggerType}
+Headline: ${signalContext.headline}
+
+Return ONLY the opening line text, nothing else.`;
+  } else {
+    // STANDARD COLD VERSION
+    systemPrompt = `${BRAND_VOICE}
 
 You are writing as ${agent.name}, ${agent.title}.
 Persona: ${agent.persona_voice || 'Professional and direct.'}
@@ -73,11 +122,9 @@ STRICT RULES:
 - Do not include a signature or CTA - just the hook
 - NO generic lines like "I noticed your company" or "Managing complex communications"
 - Think like a real SDR who googled the company for 30 seconds and found one interesting thing
-- Examples of good openers: "Falcon Holdings runs 12 properties - that usually means 12 different telecom contracts."  or "Saw PostcardMania is scaling direct mail nationally - telecom costs tend to spike with that kind of growth."`,
-    messages: [
-      {
-        role: 'user',
-        content: `Write a personalized opening line for this prospect:
+- Examples of good openers: "Falcon Holdings runs 12 properties - that usually means 12 different telecom contracts."  or "Saw PostcardMania is scaling direct mail nationally - telecom costs tend to spike with that kind of growth."`;
+
+    userPrompt = `Write a personalized opening line for this prospect:
 
 Name: ${prospect.first_name} ${prospect.last_name}
 Title: ${prospect.title || 'Unknown'}
@@ -86,12 +133,44 @@ Industry: ${prospect.industry || 'Unknown'}
 Company Size: ${prospect.company_size || 'Unknown'}
 City/State: ${prospect.city || ''}${prospect.city && prospect.state ? ', ' : ''}${prospect.state || ''}
 
-Return ONLY the opening line text, nothing else.`,
-      },
-    ],
-  });
+Return ONLY the opening line text, nothing else.`;
+  }
 
-  return message.content[0].text.trim();
+  const MAX_RETRIES = 5;
+  let lastError = null;
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      const message = await anthropic.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 200,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userPrompt }],
+      });
+      return message.content[0].text.trim();
+    } catch (err) {
+      lastError = err;
+      const isRetryable =
+        err?.status === 529 || // overloaded
+        err?.status === 429 || // rate limit
+        err?.status === 500 || // server error
+        err?.status === 502 || // bad gateway
+        err?.status === 503 || // service unavailable
+        err?.status === 504;   // gateway timeout
+
+      if (!isRetryable) throw err;
+
+      if (attempt < MAX_RETRIES - 1) {
+        // Exponential backoff: 5s, 15s, 30s, 60s, 120s
+        const backoffSec = [5, 15, 30, 60, 120][attempt];
+        console.log(`[AI Opener] Anthropic ${err.status} on attempt ${attempt + 1}, retrying in ${backoffSec}s...`);
+        await new Promise(r => setTimeout(r, backoffSec * 1000));
+      }
+    }
+  }
+
+  // All retries exhausted — throw so the caller knows (so we can halt sending instead of sending without opener)
+  throw new Error(`AI opener failed after ${MAX_RETRIES} retries: ${lastError?.message || 'unknown'}`);
 }
 
 // Generate an AI draft reply for a prospect who replied

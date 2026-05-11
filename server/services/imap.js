@@ -3,6 +3,9 @@ import { Client } from '@microsoft/microsoft-graph-client';
 import { TokenCredentialAuthenticationProvider } from '@microsoft/microsoft-graph-client/authProviders/azureTokenCredentials/index.js';
 import pool from '../db/connection.js';
 import { classifyReply, generateReplyDraft } from './ai.js';
+import { sendMail } from './graph.js';
+
+const OWNER_ALERT_EMAIL = 'jonathan@1cloudcommunications.com';
 
 let graphClient = null;
 
@@ -33,14 +36,16 @@ export async function checkNewEmails(agent) {
   const newEmails = [];
 
   try {
-    // Get unread messages from inbox received in the last 24 hours
+    // Scan all messages received in the last 2 hours (regardless of read status).
+    // Relying on DB dedup instead of isRead prevents missed replies when a human
+    // opens the email in Outlook before our poll runs.
     const since = new Date();
-    since.setHours(since.getHours() - 24);
+    since.setHours(since.getHours() - 2);
     const sinceStr = since.toISOString();
 
     const messages = await client
       .api(`/users/${mailbox}/mailFolders/Inbox/messages`)
-      .filter(`isRead eq false and receivedDateTime ge ${sinceStr}`)
+      .filter(`receivedDateTime ge ${sinceStr}`)
       .select('id,subject,from,bodyPreview,body,receivedDateTime')
       .top(50)
       .orderby('receivedDateTime desc')
@@ -91,28 +96,34 @@ export async function checkNewEmails(agent) {
         ]
       );
 
-      // If from a known prospect, pause their sequence and update status
+      // If from a known prospect, forward to owner and run AI classification
       if (prospectId) {
-        await pool.execute(
-          `UPDATE prospect_sequence_enrollment
-           SET status = 'paused', paused_at = NOW()
-           WHERE prospect_id = ? AND status = 'active'`,
-          [prospectId]
-        );
+        console.log(`[Inbox] ${agent.name}: Reply from ${fromEmail} (prospect #${prospectId})`);
 
-        await pool.execute(
-          `UPDATE prospects SET status = 'replied', updated_at = NOW()
-           WHERE id = ? AND status = 'in_sequence'`,
-          [prospectId]
-        );
-
-        await pool.execute(
-          `INSERT INTO pipeline_events (prospect_id, from_status, to_status, agent_id, notes)
-           VALUES (?, 'in_sequence', 'replied', ?, 'Auto-paused: prospect replied')`,
-          [prospectId, agent.id]
-        );
-
-        console.log(`[Inbox] ${agent.name}: Reply from ${fromEmail} (prospect #${prospectId}) - sequence paused`);
+        // Forward reply notification to owner (non-blocking)
+        (async () => {
+          try {
+            const agentMailbox = agent.smtp_user || agent.email;
+            const fwdSubject = `[Reply] ${msg.subject || '(no subject)'} — from ${fromEmail}`;
+            const fwdHtml = `
+              <p><strong>Prospect reply received</strong></p>
+              <p><strong>From:</strong> ${fromEmail}<br>
+              <strong>Agent:</strong> ${agent.name} (${agentMailbox})<br>
+              <strong>Subject:</strong> ${msg.subject || '(no subject)'}</p>
+              <hr>
+              <div>${msg.body?.content || bodyText}</div>
+            `;
+            await sendMail({
+              fromEmail: agentMailbox,
+              to: OWNER_ALERT_EMAIL,
+              subject: fwdSubject,
+              html: fwdHtml,
+            });
+            console.log(`[Inbox] Forwarded reply from ${fromEmail} to ${OWNER_ALERT_EMAIL}`);
+          } catch (fwdErr) {
+            console.error(`[Inbox] Failed to forward reply to owner:`, fwdErr.message);
+          }
+        })();
 
         // AI: Analyze sentiment and generate draft reply (async, non-blocking)
         (async () => {

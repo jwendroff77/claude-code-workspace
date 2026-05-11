@@ -12,11 +12,13 @@ import {
   Handshake,
   BarChart3,
   CheckSquare,
+  Radar,
 } from 'lucide-react';
 import clsx from 'clsx';
 
 const nav = [
   { to: '/', icon: LayoutDashboard, label: 'Command Center' },
+  { to: '/signal-intel', icon: Radar, label: 'Signal Intel' },
   { to: '/agents', icon: Users, label: 'Agent Manager' },
   { to: '/cadences', icon: GitBranch, label: 'Cadences' },
   { to: '/inbox', icon: Mail, label: 'Inbox' },

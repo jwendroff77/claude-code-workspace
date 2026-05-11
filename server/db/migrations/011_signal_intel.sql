@@ -1,0 +1,35 @@
+-- 011_signal_intel.sql
+-- Signal Intel: real-time lead intelligence from news triggers + Apollo enrichment
+
+CREATE TABLE IF NOT EXISTS signal_intel_leads (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  company VARCHAR(200) NOT NULL,
+  city VARCHAR(100),
+  state VARCHAR(50),
+  industry VARCHAR(150),
+  trigger_type ENUM('ma_acquisition','new_facility','leadership_change','relocation') NOT NULL,
+  trigger_detail TEXT,
+  trigger_headline TEXT,
+  trigger_source VARCHAR(200),
+  trigger_url TEXT,
+  trigger_date DATE,
+  score INT DEFAULT 50,
+  score_factors JSON,
+  status ENUM('new','reviewed','enrolled','dismissed') DEFAULT 'new',
+  contact_name VARCHAR(200),
+  contact_title VARCHAR(200),
+  contact_email VARCHAR(255),
+  contact_phone VARCHAR(50),
+  contact_linkedin VARCHAR(500),
+  apollo_id VARCHAR(100),
+  employee_count VARCHAR(50),
+  revenue VARCHAR(50),
+  enrolled_prospect_id INT NULL,
+  source VARCHAR(200),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_status (status),
+  INDEX idx_score (score),
+  INDEX idx_trigger (trigger_type),
+  INDEX idx_email (contact_email)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

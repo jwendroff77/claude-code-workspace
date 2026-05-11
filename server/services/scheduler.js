@@ -67,16 +67,42 @@ function getEffectiveLimit(agent) {
   return agent.daily_send_limit;
 }
 
+// MySQL advisory lock to prevent multiple scheduler instances from running simultaneously.
+// GET_LOCK returns 1 if acquired, 0 if timeout (another instance holds it).
+// This works across separate Node processes and separate connection pools.
+async function acquireSchedulerLock(connection, agentId) {
+  const lockName = `scheduler_agent_${agentId}`;
+  const [rows] = await connection.query(`SELECT GET_LOCK('${lockName}', 0) AS got_lock`);
+  return rows[0].got_lock === 1;
+}
+
+async function releaseSchedulerLock(connection, agentId) {
+  const lockName = `scheduler_agent_${agentId}`;
+  await connection.query(`SELECT RELEASE_LOCK('${lockName}')`);
+}
+
 // Process send queue for a single agent — sends ONE email per tick
 async function processAgentQueue(agent) {
   if (agent.status !== 'active' || agent.role === 'closer' || agent.role === 'manual') return 0;
   if (!isSendingDay(agent)) return 0;
   if (!isInSendWindow(agent)) return 0;
 
+  // GLOBAL LOCK: Only one process can run the scheduler for this agent at a time
+  // This prevents duplicate sends even if multiple server instances are running
+  const lockConn = await pool.getConnection();
+  const gotLock = await acquireSchedulerLock(lockConn, agent.id);
+  if (!gotLock) {
+    lockConn.release();
+    console.log(`[Scheduler] ${agent.name}: another instance already processing - skipping`);
+    return 0;
+  }
+
+  try {
+
   const effectiveLimit = getEffectiveLimit(agent);
 
   const sentToday = await getTodaySendCount(agent.id);
-  if (sentToday >= effectiveLimit) return 0;
+  if (sentToday >= effectiveLimit) { await releaseSchedulerLock(lockConn, agent.id); lockConn.release(); return 0; }
 
   const remaining = effectiveLimit - sentToday;
   const minsLeft = minutesLeftInWindow(agent);
@@ -108,21 +134,54 @@ async function processAgentQueue(agent) {
   // Only send 1 email per tick per agent — true drip
   const maxThisTick = 1;
 
-  // Get enrolled prospects due for their next step
-  const [enrollments] = await pool.query(
-    `SELECT pse.id, pse.prospect_id, pse.sequence_id, pse.current_step,
-            pse.conversation_id, pse.last_message_id,
-            p.email, p.first_name, p.last_name, p.company, p.email_status
-     FROM prospect_sequence_enrollment pse
-     JOIN prospects p ON p.id = pse.prospect_id
-     WHERE pse.agent_id = ${pool.escape(agent.id)} AND pse.status = 'active'
-     AND DATE_ADD(pse.enrolled_at, INTERVAL (
-       SELECT COALESCE(SUM(ss2.delay_days), 0)
-       FROM sequence_steps ss2
-       WHERE ss2.sequence_id = pse.sequence_id AND ss2.step_number <= pse.current_step
-     ) DAY) <= NOW()
-     LIMIT ${parseInt(maxThisTick)}`
-  );
+  // ATOMIC LOCK: Use a transaction with row-level locking to prevent race conditions
+  // where multiple scheduler instances could grab the same enrollment.
+  // SELECT FOR UPDATE locks the row, immediately mark it 'sending' so no other
+  // process can pick it up, commit, then proceed.
+  const connection = await pool.getConnection();
+  let enrollments = [];
+  try {
+    await connection.beginTransaction();
+
+    // Find and lock the next due enrollment for this agent
+    // CRITICAL: Exclude prospects who already received ANY email today (prevents back-to-back steps)
+    const [candidates] = await connection.query(
+      `SELECT pse.id, pse.prospect_id, pse.sequence_id, pse.current_step,
+              pse.conversation_id, pse.last_message_id,
+              p.email, p.first_name, p.last_name, p.company, p.email_status
+       FROM prospect_sequence_enrollment pse
+       JOIN prospects p ON p.id = pse.prospect_id
+       WHERE pse.agent_id = ${pool.escape(agent.id)} AND pse.status = 'active'
+       AND DATE_ADD(pse.enrolled_at, INTERVAL (
+         SELECT COALESCE(SUM(ss2.delay_days), 0)
+         FROM sequence_steps ss2
+         WHERE ss2.sequence_id = pse.sequence_id AND ss2.step_number <= pse.current_step
+       ) DAY) <= NOW()
+       AND NOT EXISTS (
+         SELECT 1 FROM sent_emails se
+         WHERE se.prospect_id = pse.prospect_id AND DATE(se.sent_at) = CURDATE()
+       )
+       LIMIT ${parseInt(maxThisTick)}
+       FOR UPDATE`
+    );
+
+    if (candidates.length > 0) {
+      // IMMEDIATELY mark as 'sending' so no other tick can pick this up
+      // Status goes to 'sending', we'll set it back to 'active' after send completes
+      await connection.execute(
+        "UPDATE prospect_sequence_enrollment SET status = 'sending', paused_at = NOW() WHERE id = ?",
+        [candidates[0].id]
+      );
+    }
+
+    await connection.commit();
+    enrollments = candidates;
+  } catch (lockErr) {
+    await connection.rollback();
+    console.error(`[Scheduler] Lock error for ${agent.name}: ${lockErr.message}`);
+  } finally {
+    connection.release();
+  }
 
   let sentCount = 0;
 
@@ -145,7 +204,7 @@ async function processAgentQueue(agent) {
     );
 
     if (steps.length === 0) {
-      // Sequence completed
+      // Sequence completed — mark completed (was 'sending' from the lock)
       await pool.execute(
         `UPDATE prospect_sequence_enrollment SET status = 'completed', completed_at = NOW()
          WHERE id = ?`,
@@ -257,24 +316,47 @@ async function processAgentQueue(agent) {
         }
       }
 
-      // Store AI opener and A/B variant on the sent_email record
+      // CRITICAL: Advance step + release lock IMMEDIATELY after send success.
+      console.log(`[ADVANCE-DEBUG] ${enrollment.email} enrollment=${enrollment.id} sendResult=${JSON.stringify(sendResult)} sentEmailId=${sendResult?.sentEmailId}`);
       if (sendResult?.sentEmailId) {
-        const updates = [];
-        const updateParams = [];
-        if (aiOpener) { updates.push('ai_opener = ?'); updateParams.push(aiOpener); }
-        if (abVariant) { updates.push('ab_variant_id = ?'); updateParams.push(abVariant.id); }
-        if (updates.length > 0) {
-          updateParams.push(sendResult.sentEmailId);
-          await pool.execute(`UPDATE sent_emails SET ${updates.join(', ')} WHERE id = ?`, updateParams);
-        }
-        if (abVariant) {
-          try { await recordVariantSend(abVariant.id); } catch (e) { /* non-fatal */ }
-        }
+        const [advResult] = await pool.execute(
+          "UPDATE prospect_sequence_enrollment SET current_step = current_step + 1, status = 'active', paused_at = NULL WHERE id = ?",
+          [enrollment.id]
+        );
+        console.log(`[ADVANCE-DEBUG] ${enrollment.email} UPDATE result: affected=${advResult.affectedRows} changed=${advResult.changedRows}`);
+
+        // VERIFY it actually changed
+        const [verify] = await pool.execute('SELECT current_step, status FROM prospect_sequence_enrollment WHERE id = ?', [enrollment.id]);
+        console.log(`[ADVANCE-DEBUG] ${enrollment.email} VERIFIED: step=${verify[0]?.current_step} status=${verify[0]?.status}`);
+
+        sentCount++;
+      } else {
+        await pool.execute(
+          "UPDATE prospect_sequence_enrollment SET status = 'active', paused_at = NULL WHERE id = ?",
+          [enrollment.id]
+        );
+        console.error(`[ADVANCE-DEBUG] ${enrollment.email} NO sentEmailId - lock released without advance. sendResult was: ${JSON.stringify(sendResult)}`);
+        continue;
       }
 
-      // THREADING: After sending, grab the messageId from Graph for next step's reply
-      // Wait for Graph to index, then capture conversationId + messageId
+      // Post-processing wrapped in try/catch so any failure doesn't affect the advance
       try {
+        // Store AI opener and A/B variant on the sent_email record
+        if (sendResult?.sentEmailId) {
+          const updates = [];
+          const updateParams = [];
+          if (aiOpener) { updates.push('ai_opener = ?'); updateParams.push(aiOpener); }
+          if (abVariant) { updates.push('ab_variant_id = ?'); updateParams.push(abVariant.id); }
+          if (updates.length > 0) {
+            updateParams.push(sendResult.sentEmailId);
+            await pool.execute(`UPDATE sent_emails SET ${updates.join(', ')} WHERE id = ?`, updateParams);
+          }
+          if (abVariant) {
+            try { await recordVariantSend(abVariant.id); } catch (e) { /* non-fatal */ }
+          }
+        }
+
+        // THREADING: After sending, grab the messageId from Graph for next step's reply
         await randomDelay(5000, 8000); // Wait 5-8s for Graph to index
         const lastSent = await getLastSentTo({ fromEmail, toEmail: enrollment.email });
         if (lastSent?.id) {
@@ -283,28 +365,41 @@ async function processAgentQueue(agent) {
             [lastSent.conversationId || null, lastSent.id, enrollment.id]
           );
         }
-      } catch (threadCaptureErr) {
-        console.log(`[Scheduler] Could not capture thread ID for ${enrollment.email}: ${threadCaptureErr.message}`);
+      } catch (postErr) {
+        console.log(`[Scheduler] Post-send processing failed for ${enrollment.email}: ${postErr.message} (send already committed)`);
       }
 
       // Create LinkedIn tasks at step boundaries (after Steps 2 and 4)
       try {
+        // current_step was already incremented so subtract 1 to get the step we just sent
         await createLinkedInTask(enrollment.prospect_id, agent.id, enrollment.current_step);
       } catch (e) { /* non-fatal */ }
-
-      // Advance to next step
-      await pool.execute(
-        'UPDATE prospect_sequence_enrollment SET current_step = current_step + 1 WHERE id = ?',
-        [enrollment.id]
-      );
-
-      sentCount++;
     } catch (err) {
       console.error(`Send failed for ${enrollment.email}:`, err.message);
+      // RELEASE THE LOCK even on failure so enrollment isn't stuck in 'sending'
+      // DO NOT advance step — send did not succeed
+      try {
+        await pool.execute(
+          "UPDATE prospect_sequence_enrollment SET status = 'active', paused_at = NULL WHERE id = ?",
+          [enrollment.id]
+        );
+      } catch (unlockErr) {
+        console.error(`CRITICAL: Could not unlock enrollment ${enrollment.id}: ${unlockErr.message}`);
+      }
     }
   }
 
-  return sentCount;
+  } catch (outerErr) {
+    console.error(`[Scheduler] Outer error for ${agent.name}: ${outerErr.message}`);
+  } finally {
+    // ALWAYS release the global scheduler lock for this agent
+    try {
+      await releaseSchedulerLock(lockConn, agent.id);
+      lockConn.release();
+    } catch (e) { /* non-fatal */ }
+  }
+
+  return typeof sentCount !== 'undefined' ? sentCount : 0;
 }
 
 function personalizeContent(content, prospect) {
@@ -326,10 +421,13 @@ export function startScheduler() {
   // That spreads 30 emails across 180 ticks = ~1 every 6 ticks = ~1 every 18 min per agent
   // Each agent is offset by a random delay so they don't all fire at the same second
   cron.schedule('*/3 * * * *', async () => {
+    console.log(`[Scheduler] Drip tick fired at ${new Date().toISOString()}`);
     try {
       const [agents] = await pool.execute(
         "SELECT * FROM agents WHERE role = 'outbound' AND status = 'active'"
       );
+
+      console.log(`[Scheduler] Active outbound agents: ${agents.map(a => a.name).join(', ') || 'NONE'}`);
 
       // Shuffle agent order each tick so they don't always send in the same sequence
       const shuffled = agents.sort(() => Math.random() - 0.5);
@@ -342,6 +440,8 @@ export function startScheduler() {
         const sent = await processAgentQueue(agent);
         if (sent > 0) {
           console.log(`[Scheduler] ${agent.name}: sent ${sent} email(s) this tick`);
+        } else {
+          console.log(`[Scheduler] ${agent.name}: no send this tick (gap/limit/window)`);
         }
       }
     } catch (err) {
@@ -412,11 +512,14 @@ export function startScheduler() {
   });
 
   // =====================================================
-  // PARTNER CADENCE — DISABLED FROM SCHEDULER
-  // Partner cadence sends are MANUAL ONLY via /api/partner-cadence/send-next
-  // This prevents bulk blasting. Jonathan controls the pace.
-  // =====================================================
-  // DISABLED: cron.schedule('*/5 * * * *', processPartnerCadences);
+  // PARTNER CADENCE — RE-ENABLED for Ed + Lauren Signal Intel sends
+  cron.schedule('*/5 * * * *', async () => {
+    try {
+      await processPartnerCadences();
+    } catch (err) {
+      console.error('[PartnerCadence] Error:', err.message);
+    }
+  });
   //
   // Partner reply detection still runs (checks for Jared's replies)
   cron.schedule('*/5 * * * *', async () => {
@@ -483,6 +586,14 @@ export function startScheduler() {
 // =====================================================
 
 async function checkPartnerReplies() {
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const todayIdx = new Date().getDay();
+  if (todayIdx < 1 || todayIdx > 5) return; // Mon-Fri only
+
+  const now = new Date();
+  const ctHour = (now.getUTCHours() + 24 - 5) % 24;
+  if (ctHour < 8 || ctHour >= 17) return; // 8am-5pm CT only
+
   const [enrollments] = await pool.query(
     `SELECT pe.*, p.email AS prospect_email, p.first_name, p.last_name,
             a.name AS agent_name, a.smtp_user AS agent_smtp_user, a.email AS agent_email,
@@ -491,7 +602,8 @@ async function checkPartnerReplies() {
      JOIN prospects p ON p.id = pe.prospect_id
      JOIN agents a ON a.id = pe.agent_id
      JOIN agents pa ON pa.id = pe.partner_agent_id
-     WHERE pe.status = 'waiting_partner' AND pe.current_step = 2`
+     WHERE pe.status = 'waiting_partner' AND pe.current_step = 2
+     AND pe.updated_at < DATE_SUB(NOW(), INTERVAL 4 HOUR)`
   );
 
   for (const enrollment of enrollments) {
@@ -526,10 +638,47 @@ async function checkPartnerReplies() {
 // =====================================================
 
 async function processPartnerCadences() {
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const today = days[new Date().getDay()];
+  const todayIdx = days.indexOf(today);
+  if (todayIdx < 1 || todayIdx > 5) {
+    return; // Mon-Fri only
+  }
+
+  const now = new Date();
+  const ctOffset = -5; // CT (CDT is -5, CST is -6 — close enough for window guard)
+  const ctHour = (now.getUTCHours() + 24 + ctOffset) % 24;
+  const ctMinute = now.getUTCMinutes();
+  if (ctHour < 8 || ctHour >= 17) {
+    return; // 8am-5pm CT only
+  }
+
+  // Gap guard: minimum 7 minutes between partner cadence sends
+  const [lastSendRows] = await pool.query(
+    `SELECT MAX(se.sent_at) AS last_sent FROM sent_emails se
+     JOIN partner_enrollments pe ON pe.prospect_id = se.prospect_id AND pe.agent_id = se.agent_id
+     WHERE DATE(se.sent_at) = CURDATE()`
+  );
+  if (lastSendRows[0].last_sent) {
+    const minsSinceLast = (now - new Date(lastSendRows[0].last_sent)) / 60000;
+    if (minsSinceLast < 7) return;
+  }
+
+  // GLOBAL LOCK: prevent concurrent execution if multiple server instances are running
+  const lockConn = await pool.getConnection();
+  const [lockRows] = await lockConn.query(`SELECT GET_LOCK('partner_cadences', 0) AS got_lock`);
+  if (lockRows[0].got_lock !== 1) {
+    lockConn.release();
+    console.log('[PartnerCadence] Another instance already running - skipping tick');
+    return;
+  }
+
+  try {
   // Get all active partner enrollments — LIMIT 1 per tick for drip sending
   const [enrollments] = await pool.query(
     `SELECT pe.*, p.email AS prospect_email, p.first_name, p.last_name, p.company,
             p.industry, p.city, p.state, p.title AS prospect_title,
+            p.signal_trigger_type, p.signal_headline, p.intent_score,
             a.name AS agent_name, a.smtp_user AS agent_smtp_user, a.email AS agent_email,
             a.persona_voice AS agent_persona,
             pa.name AS partner_name, pa.email AS partner_email,
@@ -541,6 +690,20 @@ async function processPartnerCadences() {
      JOIN partner_sequences ps ON ps.id = pe.sequence_id
      WHERE pe.status IN ('active', 'waiting_partner')
      AND ps.status = 'active'
+     AND NOT EXISTS (
+       SELECT 1 FROM sent_emails se
+       WHERE se.prospect_id = pe.prospect_id
+         AND se.agent_id = pe.agent_id
+         AND DATE(se.sent_at) = CURDATE()
+     )
+     AND NOT EXISTS (
+       SELECT 1 FROM partner_sequence_steps pss
+       WHERE pss.sequence_id = pe.sequence_id
+         AND pss.step_number = pe.current_step
+         AND pss.step_type = 'agent_followup'
+         AND (pe.partner_replied_at IS NULL OR DATEDIFF(NOW(), pe.partner_replied_at) < pss.delay_days)
+     )
+     ORDER BY pe.current_step ASC, pe.enrolled_at ASC
      LIMIT 1`
   );
 
@@ -615,11 +778,15 @@ async function processPartnerCadences() {
         const delaySec = Math.floor(Math.random() * 60) + 15;
         await randomDelay(delaySec * 1000, delaySec * 1000);
 
-        // Send with CC to partner
+        // Send with CC to partner (BCC Jonathan on first 3 Ed sends for review)
+        const bccJonathan = (enrollment.partner_agent_id === 7 && enrollment.id <= 644)
+          ? 'jonathan@1cloudcommunications.com' : undefined;
+
         await sendMail({
           fromEmail,
           to: enrollment.prospect_email,
           cc: enrollment.partner_email,
+          bcc: bccJonathan,
           subject,
           html: body,
         });
@@ -635,12 +802,16 @@ async function processPartnerCadences() {
         let conversationId = null;
         let messageId = null;
         for (let attempt = 0; attempt < 3; attempt++) {
-          await randomDelay(5000, 8000);
-          const lastSent = await getLastSentTo({ fromEmail, toEmail: enrollment.prospect_email });
-          if (lastSent?.conversationId) {
-            conversationId = lastSent.conversationId;
-            messageId = lastSent.id;
-            break;
+          try {
+            await randomDelay(5000, 8000);
+            const lastSent = await getLastSentTo({ fromEmail, toEmail: enrollment.prospect_email });
+            if (lastSent?.conversationId) {
+              conversationId = lastSent.conversationId;
+              messageId = lastSent.id;
+              break;
+            }
+          } catch (e) {
+            console.log(`[PartnerCadence] getLastSentTo failed (attempt ${attempt + 1}/3): ${e.message}`);
           }
           console.log(`[PartnerCadence] Waiting for Graph to index sent message (attempt ${attempt + 1}/3)...`);
         }
@@ -722,22 +893,22 @@ async function processPartnerCadences() {
         // Try to reply in the same thread using the last message ID
         if (enrollment.last_message_id) {
           try {
-            const draft = await replyToMessage({
+            await replyToMessage({
               fromEmail,
               messageId: enrollment.last_message_id,
               html: body,
             });
             console.log(`[PartnerCadence] ${enrollment.agent_name} -> ${enrollment.prospect_email} (Step ${enrollment.current_step} in-thread reply)`);
           } catch (replyErr) {
-            // If reply-to-thread fails, send as standalone with Re: subject
-            console.log(`[PartnerCadence] Thread reply failed (${replyErr.message}), sending standalone`);
+            // If reply-to-thread fails, send standalone CC'ing partner so they stay in the loop
+            console.log(`[PartnerCadence] Thread reply failed (${replyErr.message}), sending standalone CC partner`);
             const subject = `Re: ${personalizeContent(enrollment.sequence_name, enrollment)}`;
-            await sendMail({ fromEmail, to: enrollment.prospect_email, subject, html: body });
+            await sendMail({ fromEmail, to: enrollment.prospect_email, cc: enrollment.partner_email, subject, html: body });
           }
         } else {
-          // No thread to reply to - send standalone
+          // No thread to reply to - send standalone CC'ing partner
           const subject = `Re: ${personalizeContent(enrollment.sequence_name, enrollment)}`;
-          await sendMail({ fromEmail, to: enrollment.prospect_email, subject, html: body });
+          await sendMail({ fromEmail, to: enrollment.prospect_email, cc: enrollment.partner_email, subject, html: body });
         }
 
         // Log to sent_emails
@@ -747,9 +918,15 @@ async function processPartnerCadences() {
           [enrollment.prospect_id, enrollment.agent_id, `Partner cadence Step ${enrollment.current_step}`, body]
         );
 
-        // Get updated message ID for thread continuity on next step
+        // Capture new message ID for thread continuity — non-fatal if Graph rejects filter
         await randomDelay(5000, 8000);
-        const lastSent = await getLastSentTo({ fromEmail, toEmail: enrollment.prospect_email });
+        let updatedMessageId = enrollment.last_message_id;
+        try {
+          const lastSent = await getLastSentTo({ fromEmail, toEmail: enrollment.prospect_email });
+          if (lastSent?.id) updatedMessageId = lastSent.id;
+        } catch (graphErr) {
+          console.log(`[PartnerCadence] getLastSentTo failed (${graphErr.message}) - keeping existing message ID`);
+        }
 
         // Advance to next step
         const nextStep = enrollment.current_step + 1;
@@ -757,11 +934,17 @@ async function processPartnerCadences() {
           `UPDATE partner_enrollments
            SET current_step = ?, last_message_id = ?, updated_at = NOW()
            WHERE id = ?`,
-          [nextStep, lastSent?.id || enrollment.last_message_id, enrollment.id]
+          [nextStep, updatedMessageId, enrollment.id]
         );
       }
     } catch (err) {
       console.error(`[PartnerCadence] Error processing ${enrollment.first_name} ${enrollment.last_name}: ${err.message}`);
     }
+  }
+  } finally {
+    try {
+      await lockConn.query(`SELECT RELEASE_LOCK('partner_cadences')`);
+      lockConn.release();
+    } catch (e) { /* non-fatal */ }
   }
 }
