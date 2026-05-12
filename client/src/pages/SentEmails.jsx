@@ -75,9 +75,8 @@ export default function SentEmails() {
       const results = {};
       let firstEmail = null;
       for (const agent of outbound) {
-        const res = await fetch(`/api/agents/${agent.id}/sent`);
-        const data = await res.json();
-        results[agent.id] = data;
+        const data = await api.getAgentSent(agent.id);
+        results[agent.id] = Array.isArray(data) ? data : [];
         if (!firstEmail && data.length > 0) firstEmail = data[0];
       }
       setSentByAgent(results);
