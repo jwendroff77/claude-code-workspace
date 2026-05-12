@@ -11,6 +11,9 @@
     "dev:server": "npm run dev --workspace=server",
     "build": "npm run build --workspace=client"
   },
+  "engines": {
+    "node": ">=18"
+  },
   "devDependencies": {
     "concurrently": "^8.2.2"
   },
