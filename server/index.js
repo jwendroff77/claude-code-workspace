@@ -71,8 +71,28 @@ if (fs.existsSync(clientDist)) {
   });
 }
 
-app.listen(PORT, () => {
+// Add any DB columns that exist locally but were never in a migration file.
+// MySQL doesn't support ADD COLUMN IF NOT EXISTS, so we catch the duplicate-column error.
+async function runSchemaPatches() {
+  const patches = [
+    "ALTER TABLE sent_emails ADD COLUMN to_email VARCHAR(255) DEFAULT NULL AFTER agent_id",
+  ];
+  const { default: pool } = await import('./db/connection.js');
+  for (const sql of patches) {
+    try {
+      await pool.execute(sql);
+      console.log('[SCHEMA] Applied patch:', sql.slice(0, 60));
+    } catch (e) {
+      if (e.code !== 'ER_DUP_FIELDNAME') {
+        console.error('[SCHEMA] Patch failed:', e.message, '|', sql.slice(0, 60));
+      }
+    }
+  }
+}
+
+app.listen(PORT, async () => {
   console.log(`1Cloud API running on port ${PORT}`);
   console.log(`[STARTUP] PID: ${process.pid}`);
+  await runSchemaPatches();
   startScheduler();
 });
