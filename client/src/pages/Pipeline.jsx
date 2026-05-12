@@ -39,32 +39,15 @@ function ProspectCard({ prospect }) {
   const lastTouch = prospect.updated_at
     ? new Date(prospect.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
     : '—';
-  const score = prospect.intent_score;
-  const isHot = score != null && score >= 60;
-
   return (
     <div className="rounded-lg border border-border bg-bg-secondary p-3 space-y-2.5 hover:border-accent/30 transition-colors cursor-pointer">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5 mb-0.5">
-            <p className="text-sm font-medium text-txt-primary truncate">{name}</p>
-            {isHot && (
-              <span className="shrink-0 rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-bold text-success uppercase tracking-wide">
-                Hot
-              </span>
-            )}
-          </div>
+          <p className="text-sm font-medium text-txt-primary truncate mb-0.5">{name}</p>
           <p className="text-xs text-txt-secondary truncate">{prospect.title}</p>
           <p className="text-xs text-txt-tertiary truncate">{prospect.company}</p>
         </div>
-        <div className="flex flex-col items-end gap-1 shrink-0">
-          <AgentAvatar name={prospect.agent_name} status="active" size="sm" />
-          {score != null && (
-            <span className={`text-[10px] font-mono font-bold tabular-nums ${score >= 60 ? 'text-success' : score >= 30 ? 'text-warning' : 'text-txt-tertiary'}`}>
-              {score}
-            </span>
-          )}
-        </div>
+        <AgentAvatar name={prospect.agent_name} status="active" size="sm" />
       </div>
       <div className="flex items-center justify-between text-[10px] text-txt-tertiary">
         <span className="flex items-center gap-1">
@@ -103,7 +86,7 @@ export default function Pipeline() {
         <div className="flex h-full min-w-max gap-4 p-5">
           {columns.map((col) => {
             const Icon = col.icon;
-            const cards = (pipelineData[col.key] || []).slice().sort((a, b) => (b.intent_score || 0) - (a.intent_score || 0));
+            const cards = pipelineData[col.key] || [];
             return (
               <div
                 key={col.key}
