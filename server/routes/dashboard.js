@@ -120,7 +120,8 @@ router.get('/attention', async (req, res) => {
 router.get('/queue-today', async (req, res) => {
   try {
     const [partner] = await pool.query(
-      `SELECT p.first_name, p.last_name, p.company, p.title,
+      `SELECT pe.id AS enrollment_id, p.id AS prospect_id,
+              p.first_name, p.last_name, p.company, p.title,
               a.name AS agent, pe.current_step AS step,
               pe.status, pe.enrolled_at
        FROM partner_enrollments pe
@@ -137,7 +138,8 @@ router.get('/queue-today', async (req, res) => {
     );
 
     const [drip] = await pool.query(
-      `SELECT p.first_name, p.last_name, p.company, p.title,
+      `SELECT p.id AS prospect_id, NULL AS enrollment_id,
+              p.first_name, p.last_name, p.company, p.title,
               a.name AS agent, 'drip' AS step, p.status
        FROM prospects p
        JOIN agents a ON a.id = p.assigned_agent_id
@@ -162,6 +164,32 @@ router.get('/queue-today', async (req, res) => {
       partner_cadence: partner,
       drip: drip,
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /remove-from-queue - remove a prospect from ALL active sequences (100% stop)
+router.post('/remove-from-queue', async (req, res) => {
+  try {
+    const { prospect_id } = req.body;
+    if (!prospect_id) return res.status(400).json({ error: 'prospect_id required' });
+
+    // Cancel every active partner enrollment for this prospect
+    await pool.execute(
+      `UPDATE partner_enrollments
+       SET status = 'cancelled', updated_at = NOW()
+       WHERE prospect_id = ? AND status IN ('active','waiting_partner','paused')`,
+      [prospect_id]
+    );
+
+    // Stop drip sequence
+    await pool.execute(
+      `UPDATE prospects SET status = 'opted_out' WHERE id = ?`,
+      [prospect_id]
+    );
+
+    res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

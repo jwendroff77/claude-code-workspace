@@ -30,6 +30,8 @@ export const api = {
   getDashboardMetrics: () => request('/dashboard/metrics'),
   getDashboardAgents: () => request('/dashboard/agents'),
   getAttentionFeed: () => request('/dashboard/attention'),
+  getQueueToday: () => request('/dashboard/queue-today'),
+  removeFromQueue: (prospectId) => request('/dashboard/remove-from-queue', { method: 'POST', body: JSON.stringify({ prospect_id: prospectId }) }),
 
   // Agents
   getAgents: () => request('/agents'),

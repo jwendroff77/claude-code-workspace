@@ -15,6 +15,7 @@ import PartnerCadence from './pages/PartnerCadence';
 import Analytics from './pages/Analytics';
 import TaskQueue from './pages/TaskQueue';
 import SignalIntel from './pages/SignalIntel';
+import TodayQueue from './pages/TodayQueue';
 
 export default function App() {
   const [token, setToken] = useState(() => localStorage.getItem('token'));
@@ -47,6 +48,7 @@ export default function App() {
         <Route path="/tasks" element={<TaskQueue />} />
         <Route path="/lists" element={<ListManager />} />
         <Route path="/lists/scrub/:agentId" element={<AccountScrub />} />
+        <Route path="/queue" element={<TodayQueue />} />
         <Route path="/settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
