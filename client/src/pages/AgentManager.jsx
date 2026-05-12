@@ -99,7 +99,7 @@ function DayToggle({ days }) {
   );
 }
 
-function AgentDetail({ agent, onSave, onTestSmtp, onTestImap }) {
+function AgentDetail({ agent, onSave, onTestSmtp, onTestImap, onToggleStatus }) {
   const isDisabled = agent.isCloser;
 
   return (
@@ -119,6 +119,7 @@ function AgentDetail({ agent, onSave, onTestSmtp, onTestImap }) {
           <Button
             variant={agent.status === 'active' ? 'danger' : 'primary'}
             className="text-xs"
+            onClick={onToggleStatus}
           >
             {agent.status === 'active' ? 'Pause Agent' : 'Activate Agent'}
           </Button>
@@ -311,6 +312,17 @@ export default function AgentManager() {
     }
   }
 
+  async function handleToggleStatus() {
+    if (!selectedAgent) return;
+    const newStatus = selectedAgent.status === 'active' ? 'paused' : 'active';
+    try {
+      const updated = await api.updateAgent(selectedAgent.id, { status: newStatus });
+      setAgents((prev) => prev.map((a) => (a.id === updated.id ? { ...a, status: updated.status } : a)));
+    } catch (e) {
+      // Toggle failed
+    }
+  }
+
   return (
     <div className="flex min-h-screen bg-bg-primary">
       {/* Left Panel - Agent List */}
@@ -362,6 +374,7 @@ export default function AgentManager() {
             onSave={handleSave}
             onTestSmtp={handleTestSmtp}
             onTestImap={handleTestImap}
+            onToggleStatus={handleToggleStatus}
           />
         ) : (
           <div className="flex h-full items-center justify-center">
