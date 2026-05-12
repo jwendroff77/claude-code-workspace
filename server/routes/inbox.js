@@ -43,6 +43,88 @@ router.get('/', async (req, res) => {
   }
 });
 
+// --- Live Inbox (Graph API direct) ---
+
+async function getGraphClient() {
+  const { Client } = await import('@microsoft/microsoft-graph-client');
+  const { ClientSecretCredential } = await import('@azure/identity');
+  const { TokenCredentialAuthenticationProvider } = await import(
+    '@microsoft/microsoft-graph-client/authProviders/azureTokenCredentials/index.js'
+  );
+  const credential = new ClientSecretCredential(
+    process.env.MS_TENANT_ID, process.env.MS_CLIENT_ID, process.env.MS_CLIENT_SECRET
+  );
+  const authProvider = new TokenCredentialAuthenticationProvider(credential, {
+    scopes: ['https://graph.microsoft.com/.default'],
+  });
+  return Client.initWithMiddleware({ authProvider });
+}
+
+// GET /live/:agentId - list real-time inbox messages from Graph API (last 14 days)
+router.get('/live/:agentId', async (req, res) => {
+  try {
+    const [agentRows] = await pool.execute('SELECT * FROM agents WHERE id = ?', [req.params.agentId]);
+    if (agentRows.length === 0) return res.status(404).json({ error: 'Agent not found' });
+    const agent = agentRows[0];
+    const fromEmail = agent.smtp_user || agent.email;
+    if (!fromEmail) return res.status(400).json({ error: 'Agent has no email configured' });
+
+    const client = await getGraphClient();
+    const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+
+    const messages = await client
+      .api(`/users/${fromEmail}/mailFolders/Inbox/messages`)
+      .filter(`receivedDateTime ge ${twoWeeksAgo}`)
+      .select('id,subject,from,toRecipients,ccRecipients,receivedDateTime,bodyPreview,isRead,conversationId,hasAttachments')
+      .top(50)
+      .orderby('receivedDateTime desc')
+      .get();
+
+    res.json({ agentEmail: fromEmail, agentName: agent.name, messages: messages.value || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /live/:agentId/message/:messageId - get full message body
+router.get('/live/:agentId/message/:messageId', async (req, res) => {
+  try {
+    const [agentRows] = await pool.execute('SELECT * FROM agents WHERE id = ?', [req.params.agentId]);
+    if (agentRows.length === 0) return res.status(404).json({ error: 'Agent not found' });
+    const agent = agentRows[0];
+    const fromEmail = agent.smtp_user || agent.email;
+
+    const client = await getGraphClient();
+    const message = await client
+      .api(`/users/${fromEmail}/messages/${req.params.messageId}`)
+      .select('id,subject,from,toRecipients,ccRecipients,receivedDateTime,body,conversationId,isRead')
+      .get();
+
+    res.json(message);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /live/:agentId/reply - threaded reply via Graph API replyAll
+router.post('/live/:agentId/reply', async (req, res) => {
+  try {
+    const { messageId, body } = req.body;
+    if (!messageId || !body) return res.status(400).json({ error: 'messageId and body are required' });
+
+    const [agentRows] = await pool.execute('SELECT * FROM agents WHERE id = ?', [req.params.agentId]);
+    if (agentRows.length === 0) return res.status(404).json({ error: 'Agent not found' });
+    const agent = agentRows[0];
+    const fromEmail = agent.smtp_user || agent.email;
+
+    await replyToMessage({ fromEmail, messageId, html: body });
+
+    res.json({ message: 'Reply sent (threaded)' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /:id - get single received email with full thread
 router.get('/:id', async (req, res) => {
   try {

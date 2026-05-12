@@ -1,17 +1,19 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Send,
   CalendarPlus,
   ArrowRightLeft,
   XCircle,
-  PauseCircle,
-  PlayCircle,
   Mail,
   RefreshCw,
   Inbox as InboxIcon,
   Trash2,
   Sparkles,
   RotateCcw,
+  Radio,
+  Clock,
+  User,
+  ChevronDown,
 } from 'lucide-react';
 import AgentAvatar from '../components/shared/AgentAvatar';
 import Button from '../components/shared/Button';
@@ -28,9 +30,7 @@ const sentimentStyles = {
 function SentimentBadge({ sentiment }) {
   if (!sentiment) return null;
   return (
-    <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${sentimentStyles[sentiment] || sentimentStyles.neutral}`}
-    >
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${sentimentStyles[sentiment] || sentimentStyles.neutral}`}>
       {sentiment}
     </span>
   );
@@ -64,7 +64,9 @@ function stripHtml(html) {
   return tmp.textContent || tmp.innerText || '';
 }
 
-export default function Inbox() {
+// ─── Logged Replies View ────────────────────────────────────────────────────
+
+function LoggedInbox() {
   const [activeTab, setActiveTab] = useState('All');
   const [inboxItems, setInboxItems] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
@@ -73,13 +75,13 @@ export default function Inbox() {
   const [replyText, setReplyText] = useState('');
   const [aiDraft, setAiDraft] = useState(null);
   const [regenerating, setRegenerating] = useState(false);
+  const [actionFeedback, setActionFeedback] = useState(null);
 
   async function loadInbox() {
     setLoading(true);
     try {
       const data = await api.getInbox();
       if (data && data.length > 0) {
-        // Map API data to component shape
         const mapped = data.map((item) => ({
           id: item.id,
           agentName: item.agent_name || 'Unknown',
@@ -112,59 +114,34 @@ export default function Inbox() {
     setLoading(false);
   }
 
-  useEffect(() => {
-    loadInbox();
-  }, []);
+  useEffect(() => { loadInbox(); }, []);
 
-  // Load thread when selection changes
   useEffect(() => {
-    if (!selectedId) {
-      setSelectedThread(null);
-      setAiDraft(null);
-      return;
-    }
+    if (!selectedId) { setSelectedThread(null); setAiDraft(null); return; }
     api.getThread(selectedId)
       .then((data) => {
-        if (data && data.thread) {
-          setSelectedThread(data.thread);
-        } else {
-          setSelectedThread([]);
-        }
-        // Pre-fill reply with AI draft if available
+        setSelectedThread(data?.thread || []);
         if (data?.ai_draft_reply) {
           setAiDraft(data.ai_draft_reply);
-          // Only pre-fill if reply box is empty
-          if (!replyText.trim()) {
-            setReplyText(data.ai_draft_reply);
-          }
+          if (!replyText.trim()) setReplyText(data.ai_draft_reply);
         } else {
           setAiDraft(null);
         }
       })
-      .catch(() => {
-        setSelectedThread([]);
-        setAiDraft(null);
-      });
+      .catch(() => { setSelectedThread([]); setAiDraft(null); });
   }, [selectedId]);
 
-  const filtered =
-    activeTab === 'All'
-      ? inboxItems
-      : inboxItems.filter((item) => item.agentFirstName === activeTab);
+  const filtered = activeTab === 'All'
+    ? inboxItems
+    : inboxItems.filter((item) => item.agentFirstName === activeTab);
 
   const selected = inboxItems.find((item) => item.id === selectedId);
-
-  const [actionFeedback, setActionFeedback] = useState(null);
 
   const handleAction = async (actionType) => {
     if (!selected) return;
     try {
-      const result = await api.actionInbox(selected.id, { action_type: actionType });
-      const labels = {
-        book_appointment: 'Appointment booked',
-        hand_off: 'Handed off to Jonathan',
-        disqualify: 'Prospect disqualified',
-      };
+      await api.actionInbox(selected.id, { action_type: actionType });
+      const labels = { book_appointment: 'Appointment booked', hand_off: 'Handed off to Jonathan', disqualify: 'Prospect disqualified' };
       setActionFeedback(labels[actionType] || 'Action applied');
       setTimeout(() => setActionFeedback(null), 3000);
       await loadInbox();
@@ -175,18 +152,12 @@ export default function Inbox() {
   };
 
   const handleDelete = async (id, e) => {
-    e.stopPropagation(); // Don't select the email when clicking delete
+    e.stopPropagation();
     try {
-      await fetch(`/api/inbox/${id}`, { method: 'DELETE' });
-      // If we deleted the selected email, clear selection
-      if (selectedId === id) {
-        setSelectedId(null);
-        setSelectedThread(null);
-      }
+      await api.deleteInbox(id);
+      if (selectedId === id) { setSelectedId(null); setSelectedThread(null); }
       await loadInbox();
-    } catch {
-      // Delete failed
-    }
+    } catch { /* delete failed */ }
   };
 
   const handleRegenerateDraft = async () => {
@@ -194,36 +165,23 @@ export default function Inbox() {
     setRegenerating(true);
     try {
       const result = await api.regenerateDraft(selected.id);
-      if (result?.ai_draft_reply) {
-        setAiDraft(result.ai_draft_reply);
-        setReplyText(result.ai_draft_reply);
-      }
-    } catch {
-      // Regeneration failed
-    }
+      if (result?.ai_draft_reply) { setAiDraft(result.ai_draft_reply); setReplyText(result.ai_draft_reply); }
+    } catch { /* failed */ }
     setRegenerating(false);
   };
 
   const handleSendReply = async () => {
     if (!selected || !replyText.trim()) return;
     try {
-      await fetch(`/api/inbox/${selected.id}/reply`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body: replyText }),
-      });
+      await api.replyInbox(selected.id, replyText);
       setReplyText('');
-      // Reload thread
       const data = await api.getThread(selected.id);
       if (data?.thread) setSelectedThread(data.thread);
-    } catch {
-      // Send failed
-    }
+    } catch { /* failed */ }
   };
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      {/* Agent filter tabs + refresh */}
       <div className="flex items-center justify-between border-b border-border bg-bg-primary px-5 py-3">
         <div className="flex items-center gap-1">
           {agentTabs.map((tab) => (
@@ -231,16 +189,11 @@ export default function Inbox() {
               key={tab}
               onClick={() => {
                 setActiveTab(tab);
-                const firstMatch =
-                  tab === 'All'
-                    ? inboxItems[0]
-                    : inboxItems.find((i) => i.agentFirstName === tab);
+                const firstMatch = tab === 'All' ? inboxItems[0] : inboxItems.find((i) => i.agentFirstName === tab);
                 if (firstMatch) setSelectedId(firstMatch.id);
               }}
               className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
-                activeTab === tab
-                  ? 'bg-accent text-bg-primary'
-                  : 'text-txt-secondary hover:text-txt-primary hover:bg-bg-tertiary'
+                activeTab === tab ? 'bg-accent text-bg-primary' : 'text-txt-secondary hover:text-txt-primary hover:bg-bg-tertiary'
               }`}
             >
               {tab}
@@ -254,7 +207,6 @@ export default function Inbox() {
       </div>
 
       <div className="flex flex-1 min-h-0">
-        {/* Left panel - Inbox list */}
         <aside className="w-96 shrink-0 border-r border-border overflow-y-auto bg-bg-primary">
           {filtered.map((item) => (
             <div
@@ -269,21 +221,13 @@ export default function Inbox() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between mb-0.5">
                     <div className="flex items-center gap-2">
-                      {item.unread && (
-                        <span className="h-2 w-2 rounded-full bg-accent shrink-0" />
-                      )}
-                      <span
-                        className={`text-sm truncate ${
-                          item.unread ? 'font-semibold text-txt-primary' : 'text-txt-primary'
-                        }`}
-                      >
+                      {item.unread && <span className="h-2 w-2 rounded-full bg-accent shrink-0" />}
+                      <span className={`text-sm truncate ${item.unread ? 'font-semibold text-txt-primary' : 'text-txt-primary'}`}>
                         {item.prospect.name}
                       </span>
                     </div>
                     <div className="flex items-center gap-2 shrink-0 ml-2">
-                      <span className="text-[10px] text-txt-tertiary">
-                        {item.time}
-                      </span>
+                      <span className="text-[10px] text-txt-tertiary">{item.time}</span>
                       <button
                         onClick={(e) => handleDelete(item.id, e)}
                         className="text-txt-tertiary hover:text-danger transition-colors opacity-0 group-hover:opacity-100"
@@ -294,7 +238,7 @@ export default function Inbox() {
                     </div>
                   </div>
                   <p className="text-xs text-txt-secondary truncate">
-                    {item.prospect.company}{item.prospect.company && item.prospect.title ? ' \u00B7 ' : ''}{item.prospect.title}
+                    {item.prospect.company}{item.prospect.company && item.prospect.title ? ' · ' : ''}{item.prospect.title}
                   </p>
                   <p className="text-xs text-txt-tertiary mt-1 truncate">{item.subject}</p>
                   <div className="flex items-center justify-between mt-2">
@@ -309,7 +253,6 @@ export default function Inbox() {
             <div className="p-8 text-center">
               <InboxIcon className="h-10 w-10 mx-auto mb-3 text-txt-tertiary opacity-30" />
               <p className="text-sm text-txt-tertiary">No replies yet</p>
-              <p className="text-xs text-txt-tertiary mt-1">Replies from prospects will appear here</p>
             </div>
           )}
           {loading && (
@@ -320,15 +263,11 @@ export default function Inbox() {
           )}
         </aside>
 
-        {/* Right panel - Conversation thread */}
         <main className="flex-1 flex flex-col min-h-0 bg-bg-primary">
           {selected ? (
             <>
-              {/* Thread header */}
               <div className="border-b border-border px-6 py-4">
-                <h2 className="font-display text-base font-bold text-txt-primary">
-                  {selected.prospect.name}
-                </h2>
+                <h2 className="font-display text-base font-bold text-txt-primary">{selected.prospect.name}</h2>
                 <p className="text-xs text-txt-secondary mt-0.5">
                   {selected.prospect.title}{selected.prospect.title && selected.prospect.company ? ' at ' : ''}{selected.prospect.company}
                 </p>
@@ -337,25 +276,20 @@ export default function Inbox() {
                 </p>
               </div>
 
-              {/* Thread messages */}
               <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
                 {selectedThread && selectedThread.length > 0 ? (
                   selectedThread.map((msg, idx) => (
                     <div
                       key={`${msg.direction}-${msg.id || idx}`}
                       className={`rounded-xl border p-4 ${
-                        msg.direction === 'sent'
-                          ? 'border-border bg-bg-secondary ml-8'
-                          : 'border-accent/30 bg-accent/5 mr-8'
+                        msg.direction === 'sent' ? 'border-border bg-bg-secondary ml-8' : 'border-accent/30 bg-accent/5 mr-8'
                       }`}
                     >
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs font-medium text-txt-primary">
                           {msg.direction === 'sent' ? selected.agentName : selected.prospect.name}
                         </span>
-                        <span className="text-[10px] text-txt-tertiary">
-                          {formatDate(msg.sent_at)}
-                        </span>
+                        <span className="text-[10px] text-txt-tertiary">{formatDate(msg.sent_at)}</span>
                       </div>
                       <p className="text-xs text-txt-tertiary mb-2">{msg.subject}</p>
                       <div
@@ -365,29 +299,20 @@ export default function Inbox() {
                     </div>
                   ))
                 ) : (
-                  <div
-                    className="rounded-xl border border-accent/30 bg-accent/5 mr-8 p-4"
-                  >
+                  <div className="rounded-xl border border-accent/30 bg-accent/5 mr-8 p-4">
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-xs font-medium text-txt-primary">
-                        {selected.prospect.name}
-                      </span>
+                      <span className="text-xs font-medium text-txt-primary">{selected.prospect.name}</span>
                       <span className="text-[10px] text-txt-tertiary">{selected.time}</span>
                     </div>
                     <p className="text-xs text-txt-tertiary mb-2">{selected.subject}</p>
-                    <p className="text-sm text-txt-secondary leading-relaxed">
-                      {selected.preview}
-                    </p>
+                    <p className="text-sm text-txt-secondary leading-relaxed">{selected.preview}</p>
                   </div>
                 )}
               </div>
 
-              {/* Action buttons */}
               <div className="border-t border-border px-6 py-3">
                 {actionFeedback && (
-                  <div className="mb-2 rounded-lg bg-success/10 text-success px-4 py-2 text-sm font-medium">
-                    {actionFeedback}
-                  </div>
+                  <div className="mb-2 rounded-lg bg-success/10 text-success px-4 py-2 text-sm font-medium">{actionFeedback}</div>
                 )}
                 <div className="flex items-center gap-2 flex-wrap">
                   <Button variant="primary" onClick={() => handleAction('book_appointment')}>
@@ -409,7 +334,6 @@ export default function Inbox() {
                 </div>
               </div>
 
-              {/* Reply composer */}
               <div className="border-t border-border px-6 py-4 bg-bg-secondary">
                 {aiDraft && (
                   <div className="flex items-center gap-2 mb-2">
@@ -443,15 +367,275 @@ export default function Inbox() {
           ) : (
             <div className="flex flex-col items-center justify-center h-full text-txt-tertiary">
               <Mail className="h-10 w-10 mb-3 opacity-40" />
-              <p className="text-sm">
-                {inboxItems.length === 0 ? 'No replies yet' : 'Select a conversation'}
-              </p>
-              {inboxItems.length === 0 && (
-                <p className="text-xs mt-1">When prospects reply, they'll appear here</p>
-              )}
+              <p className="text-sm">{inboxItems.length === 0 ? 'No replies yet' : 'Select a conversation'}</p>
             </div>
           )}
         </main>
+      </div>
+    </div>
+  );
+}
+
+// ─── Live Inbox View (Graph API direct) ────────────────────────────────────
+
+function LiveInbox() {
+  const [agents, setAgents] = useState([]);
+  const [selectedAgent, setSelectedAgent] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [loadingMessages, setLoadingMessages] = useState(false);
+  const [selectedMsg, setSelectedMsg] = useState(null);
+  const [msgBody, setMsgBody] = useState(null);
+  const [loadingBody, setLoadingBody] = useState(false);
+  const [replyText, setReplyText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [feedback, setFeedback] = useState(null);
+
+  useEffect(() => {
+    api.getAgents().then((list) => {
+      const outbound = (list || []).filter((a) => a.role === 'outbound');
+      setAgents(outbound);
+      if (outbound.length > 0) setSelectedAgent(outbound[0]);
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!selectedAgent) return;
+    loadMessages(selectedAgent.id);
+  }, [selectedAgent]);
+
+  async function loadMessages(agentId) {
+    setLoadingMessages(true);
+    setSelectedMsg(null);
+    setMsgBody(null);
+    setReplyText('');
+    try {
+      const data = await api.getLiveInbox(agentId);
+      setMessages(data.messages || []);
+    } catch (err) {
+      setMessages([]);
+    }
+    setLoadingMessages(false);
+  }
+
+  async function loadMessageBody(msg) {
+    setSelectedMsg(msg);
+    setMsgBody(null);
+    setReplyText('');
+    setLoadingBody(true);
+    try {
+      const full = await api.getLiveMessage(selectedAgent.id, msg.id);
+      setMsgBody(full);
+    } catch {
+      setMsgBody(null);
+    }
+    setLoadingBody(false);
+  }
+
+  async function handleSendReply() {
+    if (!selectedMsg || !replyText.trim() || sending) return;
+    setSending(true);
+    try {
+      await api.replyLiveMessage(selectedAgent.id, selectedMsg.id, replyText);
+      setFeedback('Reply sent successfully');
+      setReplyText('');
+      setTimeout(() => setFeedback(null), 4000);
+    } catch (err) {
+      setFeedback('Failed to send: ' + (err.message || 'Unknown error'));
+      setTimeout(() => setFeedback(null), 5000);
+    }
+    setSending(false);
+  }
+
+  const fromName = (msg) => msg?.from?.emailAddress?.name || msg?.from?.emailAddress?.address || 'Unknown';
+  const fromAddr = (msg) => msg?.from?.emailAddress?.address || '';
+
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      {/* Agent selector + refresh */}
+      <div className="flex items-center justify-between border-b border-border bg-bg-primary px-5 py-3">
+        <div className="flex items-center gap-1">
+          {agents.map((agent) => (
+            <button
+              key={agent.id}
+              onClick={() => setSelectedAgent(agent)}
+              className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                selectedAgent?.id === agent.id
+                  ? 'bg-accent text-bg-primary'
+                  : 'text-txt-secondary hover:text-txt-primary hover:bg-bg-tertiary'
+              }`}
+            >
+              {agent.name.split(' ')[0]}
+            </button>
+          ))}
+        </div>
+        <Button variant="secondary" onClick={() => selectedAgent && loadMessages(selectedAgent.id)}>
+          <RefreshCw className="h-4 w-4" />
+          Refresh
+        </Button>
+      </div>
+
+      <div className="flex flex-1 min-h-0">
+        {/* Left panel - message list */}
+        <aside className="w-96 shrink-0 border-r border-border overflow-y-auto bg-bg-primary">
+          {loadingMessages && (
+            <div className="p-8 text-center">
+              <div className="h-8 w-8 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+              <p className="text-sm text-txt-tertiary">Loading inbox...</p>
+            </div>
+          )}
+          {!loadingMessages && messages.length === 0 && (
+            <div className="p-8 text-center">
+              <InboxIcon className="h-10 w-10 mx-auto mb-3 text-txt-tertiary opacity-30" />
+              <p className="text-sm text-txt-tertiary">No messages in the last 14 days</p>
+            </div>
+          )}
+          {!loadingMessages && messages.map((msg) => {
+            const isSelected = selectedMsg?.id === msg.id;
+            return (
+              <button
+                key={msg.id}
+                onClick={() => loadMessageBody(msg)}
+                className={`w-full text-left p-4 border-b border-border transition-colors ${
+                  isSelected ? 'bg-bg-secondary' : 'hover:bg-bg-secondary/50'
+                }`}
+              >
+                <div className="flex items-start gap-3">
+                  <div className={`mt-1 h-2 w-2 rounded-full shrink-0 ${msg.isRead ? 'bg-transparent' : 'bg-accent'}`} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className={`text-sm truncate ${msg.isRead ? 'text-txt-primary' : 'font-semibold text-txt-primary'}`}>
+                        {fromName(msg)}
+                      </span>
+                      <span className="text-[10px] text-txt-tertiary shrink-0 ml-2">
+                        {formatTime(msg.receivedDateTime)}
+                      </span>
+                    </div>
+                    <p className="text-xs text-txt-tertiary truncate mb-0.5">{fromAddr(msg)}</p>
+                    <p className="text-xs text-txt-secondary truncate font-medium">{msg.subject}</p>
+                    <p className="text-[11px] text-txt-tertiary mt-1 truncate opacity-70">{msg.bodyPreview}</p>
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </aside>
+
+        {/* Right panel - message body + reply */}
+        <main className="flex-1 flex flex-col min-h-0 bg-bg-primary">
+          {selectedMsg ? (
+            <>
+              {/* Message header */}
+              <div className="border-b border-border px-6 py-4">
+                <h2 className="font-display text-base font-bold text-txt-primary mb-2">
+                  {selectedMsg.subject}
+                </h2>
+                <div className="space-y-1 text-xs text-txt-secondary">
+                  <div className="flex items-center gap-1.5">
+                    <User className="h-3.5 w-3.5 text-txt-tertiary" />
+                    <span className="font-medium text-txt-primary">{fromName(selectedMsg)}</span>
+                    <span className="text-txt-tertiary">&lt;{fromAddr(selectedMsg)}&gt;</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Clock className="h-3.5 w-3.5 text-txt-tertiary" />
+                    <span className="text-txt-tertiary">{formatDate(selectedMsg.receivedDateTime)}</span>
+                  </div>
+                  {selectedAgent && (
+                    <div className="flex items-center gap-1.5">
+                      <Mail className="h-3.5 w-3.5 text-txt-tertiary" />
+                      <span className="text-txt-tertiary">To: {selectedAgent.smtp_user || selectedAgent.email} ({selectedAgent.name})</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Message body */}
+              <div className="flex-1 overflow-y-auto px-6 py-5">
+                {loadingBody ? (
+                  <div className="flex items-center justify-center h-32">
+                    <div className="h-6 w-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+                  </div>
+                ) : msgBody ? (
+                  <div className="rounded-xl border border-border bg-bg-secondary p-6 max-w-2xl">
+                    <div
+                      className="text-sm text-txt-secondary leading-relaxed [&_p]:mb-3 [&_br]:leading-6 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-txt-tertiary [&_blockquote]:my-2"
+                      dangerouslySetInnerHTML={{ __html: msgBody.body?.content || '' }}
+                    />
+                  </div>
+                ) : (
+                  <p className="text-sm text-txt-tertiary">Failed to load message body.</p>
+                )}
+              </div>
+
+              {/* Reply composer */}
+              <div className="border-t border-border px-6 py-4 bg-bg-secondary">
+                {feedback && (
+                  <div className={`mb-3 rounded-lg px-4 py-2 text-sm font-medium ${
+                    feedback.startsWith('Failed') ? 'bg-danger/10 text-danger' : 'bg-success/10 text-success'
+                  }`}>
+                    {feedback}
+                  </div>
+                )}
+                <p className="text-[11px] text-txt-tertiary mb-2">
+                  Reply as <span className="text-accent font-medium">{selectedAgent?.name}</span> (threaded, reply-all)
+                </p>
+                <div className="flex items-end gap-3">
+                  <textarea
+                    rows={4}
+                    placeholder="Write a reply..."
+                    value={replyText}
+                    onChange={(e) => setReplyText(e.target.value)}
+                    className="flex-1 rounded-lg border border-border bg-bg-tertiary px-4 py-3 text-sm text-txt-primary placeholder:text-txt-tertiary focus:outline-none focus:ring-1 focus:ring-accent resize-none"
+                  />
+                  <Button variant="primary" className="shrink-0" onClick={handleSendReply} disabled={sending || !replyText.trim()}>
+                    <Send className="h-4 w-4" />
+                    {sending ? 'Sending...' : 'Send'}
+                  </Button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-full text-txt-tertiary">
+              <Mail className="h-10 w-10 mb-3 opacity-40" />
+              <p className="text-sm">Select a message to read</p>
+            </div>
+          )}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main Inbox Page ────────────────────────────────────────────────────────
+
+export default function Inbox() {
+  const [mode, setMode] = useState('logged');
+
+  return (
+    <div className="flex flex-col h-full min-h-0 -m-6">
+      {/* Top mode switcher */}
+      <div className="flex items-center gap-1 border-b border-border bg-bg-primary px-6 py-3">
+        <button
+          onClick={() => setMode('logged')}
+          className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+            mode === 'logged' ? 'bg-accent text-bg-primary' : 'text-txt-secondary hover:text-txt-primary hover:bg-bg-tertiary'
+          }`}
+        >
+          <InboxIcon className="h-4 w-4" />
+          Logged Replies
+        </button>
+        <button
+          onClick={() => setMode('live')}
+          className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+            mode === 'live' ? 'bg-accent text-bg-primary' : 'text-txt-secondary hover:text-txt-primary hover:bg-bg-tertiary'
+          }`}
+        >
+          <Radio className="h-4 w-4" />
+          Live Inbox
+        </button>
+      </div>
+
+      <div className="flex-1 min-h-0">
+        {mode === 'logged' ? <LoggedInbox /> : <LiveInbox />}
       </div>
     </div>
   );

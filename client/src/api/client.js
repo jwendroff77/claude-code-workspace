@@ -65,6 +65,13 @@ export const api = {
   },
   getThread: (id) => request(`/inbox/${id}`),
   actionInbox: (id, action) => request(`/inbox/${id}/action`, { method: 'PUT', body: JSON.stringify(action) }),
+  replyInbox: (id, body) => request(`/inbox/${id}/reply`, { method: 'POST', body: JSON.stringify({ body }) }),
+  deleteInbox: (id) => request(`/inbox/${id}`, { method: 'DELETE' }),
+
+  // Live Inbox (Graph API direct)
+  getLiveInbox: (agentId) => request(`/inbox/live/${agentId}`),
+  getLiveMessage: (agentId, messageId) => request(`/inbox/live/${agentId}/message/${encodeURIComponent(messageId)}`),
+  replyLiveMessage: (agentId, messageId, body) => request(`/inbox/live/${agentId}/reply`, { method: 'POST', body: JSON.stringify({ messageId, body }) }),
 
   // Pipeline
   getPipeline: () => request('/pipeline'),
