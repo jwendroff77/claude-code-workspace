@@ -246,7 +246,7 @@ export default function AgentManager() {
         const data = await api.getAgents();
         if (data && data.length > 0) {
           // Map flat DB columns to the nested structure the UI expects
-          const mapped = data.map((a) => ({
+          const mapped = data.filter((a) => a.role !== 'closer').map((a) => ({
             ...a,
             isCloser: a.role === 'closer',
             persona: a.persona_voice || '',
