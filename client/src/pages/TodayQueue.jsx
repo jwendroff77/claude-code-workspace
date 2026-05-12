@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { RefreshCw, X, Send, Users, CheckCircle, AlertCircle } from 'lucide-react';
+import { RefreshCw, X, Send, Users, CheckCircle, AlertCircle, Search } from 'lucide-react';
 import { api } from '../api/client';
 
 function StepBadge({ step }) {
@@ -22,6 +22,7 @@ export default function TodayQueue() {
   const [removing, setRemoving] = useState(null);
   const [confirmId, setConfirmId] = useState(null);
   const [removed, setRemoved] = useState(new Set());
+  const [search, setSearch] = useState('');
 
   async function load() {
     setLoading(true);
@@ -54,7 +55,17 @@ export default function TodayQueue() {
     ? [
         ...data.partner_cadence.map(r => ({ ...r, source: 'partner' })),
         ...data.drip.map(r => ({ ...r, source: 'drip' })),
-      ].filter(r => !removed.has(r.prospect_id))
+      ]
+      .filter(r => !removed.has(r.prospect_id))
+      .filter(r => {
+        if (!search.trim()) return true;
+        const q = search.toLowerCase();
+        return (
+          `${r.first_name} ${r.last_name}`.toLowerCase().includes(q) ||
+          (r.company || '').toLowerCase().includes(q) ||
+          (r.agent || '').toLowerCase().includes(q)
+        );
+      })
     : [];
 
   return (
@@ -73,6 +84,23 @@ export default function TodayQueue() {
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           Refresh
         </button>
+      </div>
+
+      {/* Search */}
+      <div className="mb-4 relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-txt-tertiary" />
+        <input
+          type="text"
+          placeholder="Search by name, company, or agent..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="w-full rounded-lg border border-border bg-bg-secondary pl-9 pr-4 py-2.5 text-sm text-txt-primary placeholder-txt-tertiary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
+        />
+        {search && (
+          <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-txt-tertiary hover:text-txt-primary">
+            <X className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       {/* Stats */}
