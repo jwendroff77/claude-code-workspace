@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/layout/Layout';
+import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import AgentManager from './pages/AgentManager';
 import CadenceBuilder from './pages/CadenceBuilder';
@@ -15,9 +17,24 @@ import TaskQueue from './pages/TaskQueue';
 import SignalIntel from './pages/SignalIntel';
 
 export default function App() {
+  const [token, setToken] = useState(() => localStorage.getItem('token'));
+
+  function handleLogin(t) {
+    setToken(t);
+  }
+
+  function handleLogout() {
+    localStorage.removeItem('token');
+    setToken(null);
+  }
+
+  if (!token) {
+    return <Login onLogin={handleLogin} />;
+  }
+
   return (
     <Routes>
-      <Route element={<Layout />}>
+      <Route element={<Layout onLogout={handleLogout} />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/agents" element={<AgentManager />} />
         <Route path="/cadences" element={<CadenceBuilder />} />

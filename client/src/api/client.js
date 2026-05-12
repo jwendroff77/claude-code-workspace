@@ -1,13 +1,21 @@
 const API_BASE = '/api';
 
 async function request(path, options = {}) {
+  const token = localStorage.getItem('token');
   const res = await fetch(`${API_BASE}${path}`, {
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers,
     },
     ...options,
   });
+
+  if (res.status === 401) {
+    localStorage.removeItem('token');
+    window.location.reload();
+    return;
+  }
 
   if (!res.ok) {
     const error = await res.json().catch(() => ({ error: res.statusText }));

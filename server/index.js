@@ -9,6 +9,8 @@ import cors from 'cors';
 import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
 
+import authRoutes from './routes/auth.js';
+import { requireAuth } from './middleware/authMiddleware.js';
 import agentRoutes from './routes/agents.js';
 import prospectRoutes from './routes/prospects.js';
 import sequenceRoutes from './routes/sequences.js';
@@ -34,6 +36,12 @@ app.use(helmet());
 app.use(cors());
 app.use(express.json());
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 500 }));
+
+// Auth route — public
+app.use('/api/auth', authRoutes);
+
+// All other API routes require a valid JWT
+app.use('/api', requireAuth);
 
 app.use('/api/agents', agentRoutes);
 app.use('/api/prospects', prospectRoutes);
