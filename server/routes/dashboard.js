@@ -116,4 +116,55 @@ router.get('/attention', async (req, res) => {
   }
 });
 
+// GET /queue-today - today's full send queue (partner cadence + drip)
+router.get('/queue-today', async (req, res) => {
+  try {
+    const [partner] = await pool.query(
+      `SELECT p.first_name, p.last_name, p.company, p.title,
+              a.name AS agent, pe.current_step AS step,
+              pe.status, pe.enrolled_at
+       FROM partner_enrollments pe
+       JOIN prospects p ON p.id = pe.prospect_id
+       JOIN agents a ON a.id = pe.agent_id
+       WHERE pe.status IN ('active','waiting_partner')
+       AND NOT EXISTS (
+         SELECT 1 FROM sent_emails se
+         WHERE se.prospect_id = pe.prospect_id
+           AND se.agent_id = pe.agent_id
+           AND DATE(se.sent_at) = CURDATE()
+       )
+       ORDER BY pe.current_step ASC, pe.enrolled_at ASC`
+    );
+
+    const [drip] = await pool.query(
+      `SELECT p.first_name, p.last_name, p.company, p.title,
+              a.name AS agent, 'drip' AS step, p.status
+       FROM prospects p
+       JOIN agents a ON a.id = p.assigned_agent_id
+       WHERE p.status = 'in_sequence'
+       AND NOT EXISTS (
+         SELECT 1 FROM sent_emails se
+         WHERE se.prospect_id = p.id
+           AND DATE(se.sent_at) = CURDATE()
+       )
+       ORDER BY a.name, p.id ASC`
+    );
+
+    const [sent] = await pool.query(
+      `SELECT COUNT(*) AS sent_today FROM sent_emails WHERE DATE(sent_at) = CURDATE()`
+    );
+
+    res.json({
+      sent_today: sent[0].sent_today,
+      partner_cadence_remaining: partner.length,
+      drip_remaining: drip.length,
+      total_remaining: partner.length + drip.length,
+      partner_cadence: partner,
+      drip: drip,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
