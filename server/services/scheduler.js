@@ -653,7 +653,7 @@ async function processPartnerCadences() {
     return; // 8am-5pm CT only
   }
 
-  // Gap guard: minimum 7 minutes between partner cadence sends
+  // Gap guard: minimum 4 minutes between partner cadence sends
   const [lastSendRows] = await pool.query(
     `SELECT MAX(se.sent_at) AS last_sent FROM sent_emails se
      JOIN partner_enrollments pe ON pe.prospect_id = se.prospect_id AND pe.agent_id = se.agent_id
@@ -661,7 +661,7 @@ async function processPartnerCadences() {
   );
   if (lastSendRows[0].last_sent) {
     const minsSinceLast = (now - new Date(lastSendRows[0].last_sent)) / 60000;
-    if (minsSinceLast < 7) return;
+    if (minsSinceLast < 4) return;
   }
 
   // GLOBAL LOCK: prevent concurrent execution if multiple server instances are running
