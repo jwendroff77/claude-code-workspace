@@ -185,7 +185,7 @@ router.post('/remove-from-queue', async (req, res) => {
 
     // Stop drip sequence
     await pool.execute(
-      `UPDATE prospects SET status = 'opted_out' WHERE id = ?`,
+      `UPDATE prospects SET status = 'unsubscribed' WHERE id = ?`,
       [prospect_id]
     );
 

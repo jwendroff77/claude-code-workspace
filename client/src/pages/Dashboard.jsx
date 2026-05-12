@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   CalendarCheck,
   Mail,
@@ -21,6 +21,49 @@ import Button from '../components/shared/Button';
 import { api } from '../api/client';
 
 // No mock data — all metrics loaded from API
+
+function relTime(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  const mins = Math.floor((Date.now() - d) / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function mapAttentionItem(item) {
+  const ts = item.received_at || item.sent_at;
+  if (item.attention_type === 'hot_reply') {
+    return {
+      ...item,
+      type: 'reply',
+      message: `${item.first_name} ${item.last_name} at ${item.company} replied — ${item.sentiment}`,
+      agent: item.agent_name,
+      time: relTime(ts),
+    };
+  }
+  if (item.attention_type === 'send_failure') {
+    return {
+      ...item,
+      type: 'queue',
+      message: `Email bounced for ${item.first_name} ${item.last_name} at ${item.company}`,
+      agent: item.agent_name,
+      time: relTime(ts),
+    };
+  }
+  if (item.attention_type === 'low_queue') {
+    return {
+      ...item,
+      type: 'performance',
+      message: `${item.name} queue low — ${item.active_count} of ${item.queue_threshold} threshold`,
+      agent: item.name,
+      time: 'Now',
+    };
+  }
+  return { ...item, type: 'default', message: item.subject || 'Needs attention', agent: item.agent_name, time: relTime(ts) };
+}
 
 function attentionIcon(type) {
   switch (type) {
@@ -136,28 +179,30 @@ export default function Dashboard() {
   });
   const [attention, setAttention] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const fetchData = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const [metricsData, agentsData, attentionData] = await Promise.allSettled([
+        api.getDashboardMetrics(),
+        api.getDashboardAgents(),
+        api.getAttentionFeed(),
+      ]);
+      if (metricsData.status === 'fulfilled') setMetrics(metricsData.value);
+      if (agentsData.status === 'fulfilled') setAgents(agentsData.value);
+      if (attentionData.status === 'fulfilled') setAttention((attentionData.value || []).map(mapAttentionItem));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
 
   useEffect(() => {
-    async function fetchData() {
-      try {
-        const [metricsData, agentsData, attentionData] = await Promise.allSettled([
-          api.getDashboardMetrics(),
-          api.getDashboardAgents(),
-          api.getAttentionFeed(),
-        ]);
-        if (metricsData.status === 'fulfilled') setMetrics(metricsData.value);
-        if (agentsData.status === 'fulfilled') setAgents(agentsData.value);
-        if (attentionData.status === 'fulfilled') setAttention(attentionData.value);
-      } catch (e) {
-        // Keep mock data
-      } finally {
-        setLoading(false);
-      }
-    }
     fetchData();
     const interval = setInterval(fetchData, 60000);
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchData]);
 
   const totalAppointments = metrics.appointmentsBooked;
   const totalSentToday = metrics.emailsSentToday;
@@ -176,9 +221,13 @@ export default function Dashboard() {
             </p>
           </div>
           <div className="flex items-center gap-4">
-            <button className="flex items-center gap-1.5 rounded-lg border border-border bg-bg-tertiary px-3 py-1.5 text-xs text-txt-secondary transition-colors hover:text-txt-primary">
-              <RefreshCw className="h-3 w-3" />
-              Refresh
+            <button
+              onClick={fetchData}
+              disabled={refreshing}
+              className="flex items-center gap-1.5 rounded-lg border border-border bg-bg-tertiary px-3 py-1.5 text-xs text-txt-secondary transition-colors hover:text-txt-primary disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3 w-3 ${refreshing ? 'animate-spin' : ''}`} />
+              {refreshing ? 'Refreshing…' : 'Refresh'}
             </button>
             <div className="flex items-center gap-2 text-xs text-txt-tertiary">
               <Clock className="h-3.5 w-3.5" />

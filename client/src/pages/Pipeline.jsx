@@ -32,22 +32,46 @@ const emptyPipeline = {
 };
 
 function ProspectCard({ prospect }) {
+  const name = [prospect.first_name, prospect.last_name].filter(Boolean).join(' ') || '—';
+  const daysInStage = prospect.updated_at
+    ? Math.floor((Date.now() - new Date(prospect.updated_at)) / 86400000)
+    : 0;
+  const lastTouch = prospect.updated_at
+    ? new Date(prospect.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    : '—';
+  const score = prospect.intent_score;
+  const isHot = score != null && score >= 60;
+
   return (
     <div className="rounded-lg border border-border bg-bg-secondary p-3 space-y-2.5 hover:border-accent/30 transition-colors cursor-pointer">
-      <div className="flex items-start justify-between">
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-txt-primary truncate">{prospect.name}</p>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 mb-0.5">
+            <p className="text-sm font-medium text-txt-primary truncate">{name}</p>
+            {isHot && (
+              <span className="shrink-0 rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-bold text-success uppercase tracking-wide">
+                Hot
+              </span>
+            )}
+          </div>
           <p className="text-xs text-txt-secondary truncate">{prospect.title}</p>
           <p className="text-xs text-txt-tertiary truncate">{prospect.company}</p>
         </div>
-        <AgentAvatar name={prospect.agent} status={prospect.agentStatus} size="sm" />
+        <div className="flex flex-col items-end gap-1 shrink-0">
+          <AgentAvatar name={prospect.agent_name} status="active" size="sm" />
+          {score != null && (
+            <span className={`text-[10px] font-mono font-bold tabular-nums ${score >= 60 ? 'text-success' : score >= 30 ? 'text-warning' : 'text-txt-tertiary'}`}>
+              {score}
+            </span>
+          )}
+        </div>
       </div>
       <div className="flex items-center justify-between text-[10px] text-txt-tertiary">
         <span className="flex items-center gap-1">
           <Clock className="h-3 w-3" />
-          {prospect.daysInStage}d in stage
+          {daysInStage}d in stage
         </span>
-        <span>{prospect.lastTouch}</span>
+        <span>{lastTouch}</span>
       </div>
     </div>
   );
@@ -79,7 +103,7 @@ export default function Pipeline() {
         <div className="flex h-full min-w-max gap-4 p-5">
           {columns.map((col) => {
             const Icon = col.icon;
-            const cards = pipelineData[col.key] || [];
+            const cards = (pipelineData[col.key] || []).slice().sort((a, b) => (b.intent_score || 0) - (a.intent_score || 0));
             return (
               <div
                 key={col.key}
