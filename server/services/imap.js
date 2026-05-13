@@ -46,7 +46,7 @@ export async function checkNewEmails(agent) {
     const messages = await client
       .api(`/users/${mailbox}/mailFolders/Inbox/messages`)
       .filter(`receivedDateTime ge ${sinceStr}`)
-      .select('id,subject,from,bodyPreview,body,receivedDateTime')
+      .select('id,subject,from,ccRecipients,toRecipients,bodyPreview,body,receivedDateTime')
       .top(50)
       .orderby('receivedDateTime desc')
       .get();
@@ -81,14 +81,21 @@ export async function checkNewEmails(agent) {
       // Extract plain text from body
       const bodyText = msg.bodyPreview || '';
 
+      // Extract CC recipients
+      const ccEmails = (msg.ccRecipients || [])
+        .map(r => r.emailAddress?.address)
+        .filter(Boolean)
+        .join(', ') || null;
+
       // Store in received_emails
       const [result] = await pool.execute(
-        `INSERT INTO received_emails (prospect_id, agent_id, from_email, subject, body, body_text, received_at, sentiment)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'neutral')`,
+        `INSERT INTO received_emails (prospect_id, agent_id, from_email, cc_emails, subject, body, body_text, received_at, sentiment)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'neutral')`,
         [
           prospectId,
           agent.id,
           fromEmail,
+          ccEmails,
           msg.subject || '(no subject)',
           msg.body?.content || bodyText,
           bodyText,

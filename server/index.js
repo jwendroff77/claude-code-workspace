@@ -76,6 +76,7 @@ if (fs.existsSync(clientDist)) {
 async function runSchemaPatches() {
   const patches = [
     "ALTER TABLE sent_emails ADD COLUMN to_email VARCHAR(255) DEFAULT NULL AFTER agent_id",
+    "ALTER TABLE received_emails ADD COLUMN cc_emails TEXT DEFAULT NULL AFTER from_email",
   ];
   const { default: pool } = await import('./db/connection.js');
   for (const sql of patches) {
