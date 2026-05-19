@@ -131,6 +131,33 @@ async function processAgentQueue(agent) {
     }
   }
 
+  // Partner cadence priority: if this agent has partner sends due right now, skip drip this tick
+  const [pendingPartner] = await pool.execute(
+    `SELECT COUNT(*) as cnt
+     FROM partner_enrollments pe
+     JOIN partner_sequences ps ON ps.id = pe.sequence_id
+     WHERE pe.agent_id = ?
+     AND pe.status IN ('active', 'waiting_partner')
+     AND ps.status = 'active'
+     AND NOT EXISTS (
+       SELECT 1 FROM sent_emails se
+       WHERE se.prospect_id = pe.prospect_id AND se.agent_id = pe.agent_id AND DATE(se.sent_at) = CURDATE()
+     )
+     AND NOT EXISTS (
+       SELECT 1 FROM partner_sequence_steps pss
+       WHERE pss.sequence_id = pe.sequence_id AND pss.step_number = pe.current_step
+         AND pss.step_type = 'agent_followup'
+         AND (pe.partner_replied_at IS NULL OR DATEDIFF(NOW(), pe.partner_replied_at) < pss.delay_days)
+     )`,
+    [agent.id]
+  );
+  if (pendingPartner[0].cnt > 0) {
+    console.log(`[Scheduler] ${agent.name}: ${pendingPartner[0].cnt} partner send(s) pending — holding drip this tick`);
+    await releaseSchedulerLock(lockConn, agent.id);
+    lockConn.release();
+    return 0;
+  }
+
   // Only send 1 email per tick per agent — true drip
   const maxThisTick = 1;
 
@@ -432,9 +459,11 @@ export function startScheduler() {
       // Shuffle agent order each tick so they don't always send in the same sequence
       const shuffled = agents.sort(() => Math.random() - 0.5);
 
-      for (const agent of shuffled) {
-        // Random offset per agent: 0-90 seconds so agents don't all send at :00
-        const offsetSec = Math.floor(Math.random() * 91);
+      for (let i = 0; i < shuffled.length; i++) {
+        const agent = shuffled[i];
+        // Stagger agents: each one waits at least 60s more than the previous + 0-30s jitter
+        // so sends are never bunched together (e.g. agents fire at ~0s, ~75s, ~150s, ~225s)
+        const offsetSec = (i * 60) + Math.floor(Math.random() * 31);
         await randomDelay(offsetSec * 1000, offsetSec * 1000);
 
         const sent = await processAgentQueue(agent);
@@ -703,7 +732,7 @@ async function processPartnerCadences() {
          AND pss.step_type = 'agent_followup'
          AND (pe.partner_replied_at IS NULL OR DATEDIFF(NOW(), pe.partner_replied_at) < pss.delay_days)
      )
-     ORDER BY pe.current_step ASC, pe.enrolled_at ASC
+     ORDER BY pe.current_step DESC, pe.enrolled_at ASC
      LIMIT 1`
   );
 
