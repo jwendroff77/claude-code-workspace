@@ -8,6 +8,41 @@ import { createLinkedInTask } from '../routes/tasks.js';
 import { recalculateAllScores } from './scoring.js';
 import { checkDomainHealth } from './domain.js';
 
+// ---- Business day helpers ----
+// Holidays excluded from business day counts (fixed dates + computed floating holidays)
+function getHolidays(year) {
+  const h = new Set();
+  h.add(`${year}-01-01`); // New Year's Day
+  h.add(`${year}-07-04`); // July 4th
+  h.add(`${year}-12-25`); // Christmas
+  // Memorial Day: last Monday of May
+  const may = new Date(year, 5, 0); // last day of May
+  may.setDate(may.getDate() - ((may.getDay() + 6) % 7));
+  h.add(may.toISOString().slice(0, 10));
+  // Labor Day: first Monday of September
+  const sep = new Date(year, 8, 1);
+  sep.setDate(sep.getDate() + ((8 - sep.getDay()) % 7 || 7));
+  h.add(sep.toISOString().slice(0, 10));
+  return h;
+}
+
+function countBusinessDays(startDate, endDate) {
+  const cur = new Date(startDate);
+  const end = new Date(endDate);
+  cur.setHours(0, 0, 0, 0);
+  end.setHours(0, 0, 0, 0);
+  cur.setDate(cur.getDate() + 1); // start counting day after startDate
+  let count = 0;
+  while (cur <= end) {
+    const dow = cur.getDay();
+    const ds = cur.toISOString().slice(0, 10);
+    if (dow !== 0 && dow !== 6 && !getHolidays(cur.getFullYear()).has(ds)) count++;
+    cur.setDate(cur.getDate() + 1);
+  }
+  return count;
+}
+// ---- End business day helpers ----
+
 // Random delay between min and max milliseconds
 function randomDelay(minMs, maxMs) {
   const ms = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
@@ -730,7 +765,7 @@ async function processPartnerCadences() {
        WHERE pss.sequence_id = pe.sequence_id
          AND pss.step_number = pe.current_step
          AND pss.step_type = 'agent_followup'
-         AND (pe.partner_replied_at IS NULL OR DATEDIFF(NOW(), pe.partner_replied_at) < pss.delay_days)
+         AND (pe.partner_replied_at IS NULL OR DATEDIFF(NOW(), pe.partner_replied_at) < (pss.delay_days * 2))
      )
      ORDER BY pe.current_step DESC, pe.enrolled_at ASC
      LIMIT 1`
@@ -773,10 +808,10 @@ async function processPartnerCadences() {
         isDue = true;
 
       } else if (step.step_type === 'agent_followup') {
-        // Steps 3-6: calculate days since partner replied
+        // Steps 3-6: count business days since partner replied (excludes weekends + holidays)
         if (!enrollment.partner_replied_at) continue;
-        const daysSincePartnerReply = (Date.now() - new Date(enrollment.partner_replied_at).getTime()) / (1000 * 60 * 60 * 24);
-        isDue = daysSincePartnerReply >= step.delay_days;
+        const bizDaysSinceReply = countBusinessDays(new Date(enrollment.partner_replied_at), new Date());
+        isDue = bizDaysSinceReply >= step.delay_days;
       }
 
       if (!isDue) continue;
