@@ -767,7 +767,7 @@ async function processPartnerCadences() {
          AND pss.step_type = 'agent_followup'
          AND pe.partner_replied_at IS NULL
      )
-     ORDER BY pe.current_step DESC, pe.enrolled_at ASC
+     ORDER BY pe.partner_replied_at DESC, pe.current_step DESC, pe.enrolled_at ASC
      LIMIT 1`
   );
 
