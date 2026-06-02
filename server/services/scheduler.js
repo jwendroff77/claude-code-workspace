@@ -765,7 +765,7 @@ async function processPartnerCadences() {
        WHERE pss.sequence_id = pe.sequence_id
          AND pss.step_number = pe.current_step
          AND pss.step_type = 'agent_followup'
-         AND (pe.partner_replied_at IS NULL OR DATEDIFF(NOW(), pe.partner_replied_at) < (pss.delay_days * 2))
+         AND pe.partner_replied_at IS NULL
      )
      ORDER BY pe.current_step DESC, pe.enrolled_at ASC
      LIMIT 1`
