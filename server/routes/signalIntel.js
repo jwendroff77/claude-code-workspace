@@ -162,13 +162,22 @@ router.put('/:id/enroll', async (req, res) => {
 
     const prospectId = result.insertId;
 
-    // Find an active sequence — round-robin assign to agents
-    const [agents] = await pool.query("SELECT id FROM agents WHERE status = 'active' AND role = 'outbound' ORDER BY id");
-    const [seqs] = await pool.query("SELECT id, name FROM sequences WHERE status = 'active' LIMIT 1");
+    // Round-robin assign to agents, and enroll each prospect in THAT agent's OWN sequence.
+    // Each agent has a sequence whose name starts with their first name (e.g. "Scott - Enterprise Narrative").
+    // Bug fixed 2026-06-17: previously always enrolled in the first sequence (Megan's), so Lauren/Kate/Scott
+    // sent Megan-signed emails. Match the sequence to the sending agent so the signature is correct.
+    const [agents] = await pool.query("SELECT id, name FROM agents WHERE status = 'active' AND role = 'outbound' ORDER BY id");
+    const [seqs] = await pool.query("SELECT id, name FROM sequences WHERE status = 'active' ORDER BY id");
 
     if (agents.length > 0 && seqs.length > 0) {
       // Assign agent round-robin based on prospect ID
-      const agentId = agents[prospectId % agents.length].id;
+      const agent = agents[prospectId % agents.length];
+      const agentId = agent.id;
+
+      // Pick the agent's own sequence (name starts with their first name); fall back to first sequence.
+      const agentFirst = (agent.name || '').split(' ')[0].toLowerCase();
+      const ownSeq = seqs.find(s => (s.name || '').toLowerCase().startsWith(agentFirst));
+      const sequenceId = ownSeq ? ownSeq.id : seqs[0].id;
 
       await pool.execute(
         'UPDATE prospects SET assigned_agent_id = ? WHERE id = ?',
@@ -178,7 +187,7 @@ router.put('/:id/enroll', async (req, res) => {
       await pool.execute(
         `INSERT INTO prospect_sequence_enrollment (prospect_id, sequence_id, agent_id, current_step, status)
          VALUES (?, ?, ?, 1, 'active')`,
-        [prospectId, seqs[0].id, agentId]
+        [prospectId, sequenceId, agentId]
       );
     }
 
