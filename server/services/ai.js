@@ -34,7 +34,7 @@ export async function generateRewrite({ step, agent, coachingNotes }) {
     : '';
 
   const message = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 1024,
     system: `${BRAND_VOICE}\n\nYou are writing as ${agent.name}, ${agent.title}.\nPersona: ${agent.persona_voice}${notesContext}`,
     messages: [
@@ -142,7 +142,7 @@ Return ONLY the opening line text, nothing else.`;
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
       const message = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6',
         max_tokens: 200,
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
@@ -189,7 +189,7 @@ export async function generateReplyDraft({ prospect, agent, incomingEmail, threa
   }
 
   const message = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 500,
     system: `${BRAND_VOICE}
 
@@ -234,7 +234,7 @@ export async function classifyReply(text) {
   const anthropic = getClient();
 
   const message = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 200,
     messages: [
       {
@@ -287,7 +287,7 @@ export async function generateSequence({ vertical, agent, numSteps }) {
   const anthropic = getClient();
 
   const message = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 4000,
     system: `${BRAND_VOICE}
 
