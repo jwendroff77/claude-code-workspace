@@ -5,6 +5,7 @@ let client = null;
 
 function getClient() {
   const key = process.env.ANTHROPIC_API_KEY;
+  // NOTE: opener/classify/draft models migrated off retired claude-sonnet-4-20250514 (retired 2026-06-15) to claude-sonnet-4-6
   if (!client || !key) {
     if (!key) console.error('[AI] WARNING: ANTHROPIC_API_KEY is not set in environment');
     client = new Anthropic({ apiKey: key });
