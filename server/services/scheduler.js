@@ -842,8 +842,9 @@ async function processPartnerCadences() {
         const delaySec = Math.floor(Math.random() * 60) + 15;
         await randomDelay(delaySec * 1000, delaySec * 1000);
 
-        // Send with CC to partner (BCC Jonathan on first 3 Ed sends for review)
-        const bccJonathan = (enrollment.partner_agent_id === 7 && enrollment.id <= 644)
+        // BCC Jonathan ONLY on the Baird Medical step-1 TEST send (enrollment 1032).
+        // Scoped to the test so the rest of the Ed batch is NOT BCC'd. Remove after test confirmed.
+        const bccJonathan = (enrollment.id === 1032)
           ? 'jonathan@1cloudcommunications.com' : undefined;
 
         await sendMail({
