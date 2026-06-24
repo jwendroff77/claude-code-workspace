@@ -767,6 +767,15 @@ async function processPartnerCadences() {
          AND pss.step_type = 'agent_followup'
          AND pe.partner_replied_at IS NULL
      )
+     -- Only pick enrollments at a SENDABLE step. partner_reply (step 2) just waits
+     -- for the partner and is handled by checkPartnerReplies; including it here let
+     -- step-2 enrollments starve step-1 sends every tick (LIMIT 1).
+     AND EXISTS (
+       SELECT 1 FROM partner_sequence_steps pss2
+       WHERE pss2.sequence_id = pe.sequence_id
+         AND pss2.step_number = pe.current_step
+         AND pss2.step_type IN ('agent_send_cc', 'agent_followup')
+     )
      ORDER BY pe.partner_replied_at ASC, pe.current_step DESC, pe.enrolled_at ASC
      LIMIT 1`
   );
