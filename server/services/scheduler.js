@@ -743,6 +743,7 @@ async function processPartnerCadences() {
     `SELECT pe.*, p.email AS prospect_email, p.first_name, p.last_name, p.company,
             p.industry, p.city, p.state, p.title AS prospect_title,
             p.signal_trigger_type, p.signal_headline, p.intent_score,
+            p.personalized_opener AS stored_opener,
             a.name AS agent_name, a.smtp_user AS agent_smtp_user, a.email AS agent_email,
             a.persona_voice AS agent_persona,
             pa.name AS partner_name, pa.email AS partner_email,
@@ -829,17 +830,19 @@ async function processPartnerCadences() {
       if (step.step_type === 'agent_send_cc') {
         const fromEmail = enrollment.agent_smtp_user || enrollment.agent_email;
 
-        // Generate AI opener for Step 1
+        // Generate AI opener for Step 1 (fall back to pre-stored opener if live gen fails)
         let aiOpener = '';
         try {
           aiOpener = await generatePersonalizedOpener({
             prospect: enrollment,
             agent: { name: enrollment.agent_name, title: '', persona_voice: enrollment.agent_persona || '' },
           });
-          await pool.execute('UPDATE prospects SET personalized_opener = ? WHERE id = ?', [aiOpener, enrollment.prospect_id]);
+          if (aiOpener) await pool.execute('UPDATE prospects SET personalized_opener = ? WHERE id = ?', [aiOpener, enrollment.prospect_id]);
         } catch (aiErr) {
           console.log(`[PartnerCadence] AI opener failed for ${enrollment.prospect_email}: ${aiErr.message}`);
         }
+        // Fallback: use the pre-generated stored opener (prospects.personalized_opener) if live gen produced nothing
+        if (!aiOpener) aiOpener = enrollment.stored_opener || '';
 
         // Personalize content - aiOpener tag gets replaced, safety net strips any remaining tags
         let body = step.body_html || '';
