@@ -287,7 +287,26 @@ export async function checkBounces(agent) {
     for (const msg of messages.value) {
       // Extract the bounced email address from the NDR body
       const bouncedEmail = extractBouncedEmail(msg.body?.content || msg.bodyPreview || '', msg.subject || '');
-      if (!bouncedEmail) continue;
+      if (!bouncedEmail) {
+        // An NDR we can't auto-parse (e.g. mail-loop/routing errors with no recipient
+        // in the body). Don't silently drop it — flag to the owner for manual review,
+        // then mark read so we don't re-alert every tick.
+        (async () => {
+          try {
+            await sendMail({
+              fromEmail: mailbox,
+              to: OWNER_ALERT_EMAIL,
+              subject: `[Bounce — needs manual review] ${msg.subject || '(no subject)'}`,
+              html: `<p><strong>A bounce/NDR arrived but the failed recipient could not be auto-extracted</strong>, so no cadence was stopped automatically. Please review this one by hand.</p>
+                     <p><strong>Agent mailbox:</strong> ${mailbox}<br>
+                     <strong>NDR subject:</strong> ${msg.subject || '(none)'}</p>
+                     <p>Common cause: a routing/mail-loop error (e.g. "554 5.4.14 Hop count exceeded") that does not name the recipient.</p>`,
+            });
+          } catch (e) { console.error(`[Bounce] unparseable-NDR alert failed:`, e.message); }
+        })();
+        try { await client.api(`/users/${mailbox}/messages/${msg.id}`).update({ isRead: true }); } catch (e) { /* non-fatal */ }
+        continue;
+      }
 
       // Check if already in exclusion list
       const [existing] = await pool.execute(
@@ -304,7 +323,7 @@ export async function checkBounces(agent) {
 
       // Find the prospect
       const [prospects] = await pool.execute(
-        'SELECT id, status FROM prospects WHERE email = ?',
+        'SELECT id, status, first_name, last_name, company FROM prospects WHERE email = ?',
         [bouncedEmail]
       );
 
@@ -353,6 +372,27 @@ export async function checkBounces(agent) {
         [bouncedEmail]
       );
 
+      // FLAG: notify the owner that a bounce auto-stopped the cadence (non-blocking)
+      (async () => {
+        try {
+          const p = prospects[0];
+          const who = p ? `${[p.first_name, p.last_name].filter(Boolean).join(' ')} — ${p.company || ''}`.trim() : '(not a known prospect)';
+          await sendMail({
+            fromEmail: mailbox,
+            to: OWNER_ALERT_EMAIL,
+            subject: `[Bounce] ${bouncedEmail} — cadence auto-stopped`,
+            html: `<p><strong>Bounce detected — cadence stopped automatically</strong></p>
+                   <p><strong>Address:</strong> ${bouncedEmail}<br>
+                   <strong>Prospect:</strong> ${who}<br>
+                   <strong>Agent:</strong> ${agent.name}<br>
+                   <strong>NDR subject:</strong> ${msg.subject || '(none)'}</p>
+                   <p>All active and paused sequences for this address have been cancelled, the prospect is marked <strong>bounced</strong>, and the address was added to the exclusion list so it will not be emailed again.</p>`,
+          });
+        } catch (alertErr) {
+          console.error(`[Bounce] owner alert failed for ${bouncedEmail}:`, alertErr.message);
+        }
+      })();
+
       // Mark NDR as read
       try {
         await client.api(`/users/${mailbox}/messages/${msg.id}`).update({ isRead: true });
@@ -382,6 +422,8 @@ function extractBouncedEmail(body, subject) {
   // 6. Subject often contains the bounced address
 
   const patterns = [
+    // Modern Office 365 NDR: "Your message to user@domain.com couldn't be delivered" / "wasn't delivered"
+    /message to\s+<?([^\s<>]+@[^\s<>]+?)>?\s+(?:could\s*n['’]?t|could not|was\s*n['’]?t|was not|cannot|can['’]?t)\s+be\s+delivered/i,
     /Final-Recipient:\s*rfc822;\s*([^\s<>;]+@[^\s<>;]+)/i,
     /Original-Recipient:\s*rfc822;\s*([^\s<>;]+@[^\s<>;]+)/i,
     /Delivery.*?failed.*?<([^>]+@[^>]+)>/i,
@@ -410,6 +452,19 @@ function extractBouncedEmail(body, subject) {
     if (!email.includes('mailer-daemon') && !email.includes('postmaster')) {
       return email;
     }
+  }
+
+  // Last-resort fallback: first external email in the body that is NOT one of our
+  // own sending domains or a system/provider address. In O365 NDRs the failed
+  // recipient is the first such address. Prevents silently-skipped bounces.
+  const ours = ['1cloudnow.com', '1cloudcommunications.com'];
+  const systemy = ['mailer-daemon', 'postmaster', 'microsoft.com', 'office365', 'outlook.com', 'protection.outlook'];
+  const all = text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || [];
+  for (const raw of all) {
+    const email = raw.toLowerCase();
+    if (ours.some(d => email.endsWith('@' + d) || email.includes('@' + d)) ) continue;
+    if (systemy.some(s => email.includes(s))) continue;
+    return email;
   }
 
   return null;
