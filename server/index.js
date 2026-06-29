@@ -77,6 +77,8 @@ async function runSchemaPatches() {
   const patches = [
     "ALTER TABLE sent_emails ADD COLUMN to_email VARCHAR(255) DEFAULT NULL AFTER agent_id",
     "ALTER TABLE received_emails ADD COLUMN cc_emails TEXT DEFAULT NULL AFTER from_email",
+    // When a step's copy says a partner is CC'd, this flag makes the send actually CC them.
+    "ALTER TABLE sequence_steps ADD COLUMN cc_partner TINYINT(1) NOT NULL DEFAULT 0",
   ];
   const { default: pool } = await import('./db/connection.js');
   for (const sql of patches) {

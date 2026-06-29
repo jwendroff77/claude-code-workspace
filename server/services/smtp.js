@@ -17,7 +17,7 @@ function buildUnsubFooter(prospectId, email) {
 }
 
 // Send an email as a specific agent via Microsoft Graph API
-export async function sendEmail({ agent, to, subject, html, text, prospectId, stepId }) {
+export async function sendEmail({ agent, to, cc, subject, html, text, prospectId, stepId }) {
   // Use the agent's smtp_user (M365 login) as the from address for Graph API
   const fromEmail = agent.smtp_user || agent.email;
 
@@ -72,7 +72,7 @@ export async function sendEmail({ agent, to, subject, html, text, prospectId, st
   // Build List-Unsubscribe URL for email headers
   const unsubscribeUrl = prospectId && to ? `${UNSUB_BASE_URL}/${generateUnsubToken(prospectId, to)}` : undefined;
 
-  await sendMail({ fromEmail, to, subject, html: htmlFinal || html, text: textFinal, unsubscribeUrl });
+  await sendMail({ fromEmail, to, cc, subject, html: htmlFinal || html, text: textFinal, unsubscribeUrl });
 
   return { messageId: `graph-${Date.now()}`, sentEmailId, accepted: [to] };
 }

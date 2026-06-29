@@ -277,6 +277,25 @@ async function processAgentQueue(agent) {
 
     const step = steps[0];
 
+    // PARTNER CC: if this step's copy states a partner is CC'd (cc_partner flag),
+    // actually put that partner on the CC line. Mapping comes from partner_sequences
+    // (drip agent -> partner_agent). Never claim a CC we don't make.
+    let ccPartner = null;
+    if (step.cc_partner) {
+      const [partnerRows] = await pool.execute(
+        `SELECT pa.email
+           FROM partner_sequences ps
+           JOIN agents pa ON pa.id = ps.partner_agent_id
+          WHERE ps.agent_id = ?
+          LIMIT 1`,
+        [agent.id]
+      );
+      ccPartner = partnerRows[0]?.email || null;
+      if (!ccPartner) {
+        console.error(`[CC-GUARD] step ${step.id} is flagged cc_partner but no partner is mapped for agent ${agent.id} (${agent.name}). Email would falsely claim a CC.`);
+      }
+    }
+
     // A/B Testing: check if this step has an active test
     let abVariant = null;
     let useSubject = step.subject_line;
@@ -364,6 +383,7 @@ async function processAgentQueue(agent) {
         sendResult = await sendEmail({
           agent,
           to: enrollment.email,
+          cc: ccPartner,
           subject,
           html: body,
           text: step.body_text ? personalizeContent(step.body_text, enrollment) : undefined,
