@@ -258,6 +258,20 @@ async function processAgentQueue(agent) {
       continue;
     }
 
+    // Pre-send verification (NeverBounce): verify any not-yet-verified address before
+    // its FIRST send, across every enroll path. No-op if NEVERBOUNCE_API_KEY is unset
+    // (verifyEmail returns 'skipped' -> allowed), so this is safe even before the key is added.
+    if (enrollment.current_step === 1 && !enrollment.email_status) {
+      try {
+        const { verifyAndUpdate } = await import('./emailVerification.js');
+        const safe = await verifyAndUpdate(enrollment.prospect_id);
+        if (!safe) {
+          console.log(`[Verify] ${enrollment.email} blocked pre-send (drip)`);
+          continue; // verifyAndUpdate already cancelled the enrollment + excluded the address
+        }
+      } catch (e) { console.error(`[Verify] ${enrollment.email}:`, e.message); }
+    }
+
     // Get the current step content
     const [steps] = await pool.execute(
       `SELECT * FROM sequence_steps
@@ -762,7 +776,7 @@ async function processPartnerCadences() {
   const [enrollments] = await pool.query(
     `SELECT pe.*, p.email AS prospect_email, p.first_name, p.last_name, p.company,
             p.industry, p.city, p.state, p.title AS prospect_title,
-            p.signal_trigger_type, p.signal_headline, p.intent_score,
+            p.signal_trigger_type, p.signal_headline, p.intent_score, p.email_status,
             p.personalized_opener AS stored_opener,
             a.name AS agent_name, a.smtp_user AS agent_smtp_user, a.email AS agent_email,
             a.persona_voice AS agent_persona,
@@ -848,6 +862,19 @@ async function processPartnerCadences() {
 
       // ---- STEP TYPE: agent_send_cc (Step 1) ----
       if (step.step_type === 'agent_send_cc') {
+        // Pre-send verification (NeverBounce) before the partner intro goes out CC'ing the partner.
+        // No-op if NEVERBOUNCE_API_KEY is unset. Blocks invalid/disposable and cancels the enrollment.
+        if (!enrollment.email_status) {
+          try {
+            const { verifyAndUpdate } = await import('./emailVerification.js');
+            const safe = await verifyAndUpdate(enrollment.prospect_id);
+            if (!safe) {
+              console.log(`[Verify] ${enrollment.prospect_email} blocked pre-send (partner)`);
+              continue; // verifyAndUpdate cancelled drip + partner enrollments + excluded
+            }
+          } catch (e) { console.error(`[Verify] partner ${enrollment.prospect_email}:`, e.message); }
+        }
+
         const fromEmail = enrollment.agent_smtp_user || enrollment.agent_email;
 
         // Generate AI opener for Step 1 (fall back to pre-stored opener if live gen fails)

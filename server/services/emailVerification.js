@@ -73,6 +73,11 @@ export async function verifyAndUpdate(prospectId) {
       [prospectId]
     );
     await pool.execute(
+      `UPDATE partner_enrollments SET status = 'cancelled'
+       WHERE prospect_id = ? AND status IN ('active', 'waiting_partner', 'paused')`,
+      [prospectId]
+    );
+    await pool.execute(
       "INSERT INTO exclusion_list (email, reason, added_at) VALUES (?, ?, NOW())",
       [rows[0].email, `email_verification: ${result}`]
     );
