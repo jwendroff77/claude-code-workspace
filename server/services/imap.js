@@ -270,7 +270,10 @@ export async function checkBounces(agent) {
     const messages = await client
       .api(`/users/${mailbox}/mailFolders/Inbox/messages`)
       .filter(
-        `receivedDateTime ge ${sinceStr} and (` +
+        // isRead eq false: every branch below marks an NDR read once handled, so
+        // this stops the same unparseable NDR from being re-selected and re-alerted
+        // every 15-min tick for 48h (the "[Bounce — needs manual review]" loop).
+        `isRead eq false and receivedDateTime ge ${sinceStr} and (` +
         `contains(from/emailAddress/address, 'mailer-daemon') or ` +
         `contains(from/emailAddress/address, 'postmaster') or ` +
         `contains(subject, 'Undeliverable') or ` +
