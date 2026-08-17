@@ -183,6 +183,14 @@ async function processAgentQueue(agent) {
        WHERE pss.sequence_id = pe.sequence_id AND pss.step_number = pe.current_step
          AND pss.step_type = 'agent_followup'
          AND (pe.partner_replied_at IS NULL OR DATEDIFF(NOW(), pe.partner_replied_at) < pss.delay_days)
+     )
+     -- Only count enrollments at a SENDABLE step. waiting_partner at step 2
+     -- (partner_reply) sends nothing, but was counted as "pending" here and held
+     -- the agent's drip EVERY tick — froze Megan's + Lauren's drips for weeks.
+     AND EXISTS (
+       SELECT 1 FROM partner_sequence_steps pss2
+       WHERE pss2.sequence_id = pe.sequence_id AND pss2.step_number = pe.current_step
+         AND pss2.step_type IN ('agent_send_cc', 'agent_followup')
      )`,
     [agent.id]
   );
@@ -222,6 +230,15 @@ async function processAgentQueue(agent) {
        AND NOT EXISTS (
          SELECT 1 FROM sent_emails se
          WHERE se.prospect_id = pse.prospect_id AND DATE(se.sent_at) = CURDATE()
+       )
+       -- Dead-status backstop: never drip to prospects that are out of play
+       AND p.status NOT IN ('disqualified', 'unsubscribed', 'bounced', 'booked', 'handed_off')
+       -- DUAL-TRACK GUARD: a prospect live in a partner cadence must never also
+       -- receive drip sends (caused duplicate intros, e.g. Peabody 2026-07-08)
+       AND NOT EXISTS (
+         SELECT 1 FROM partner_enrollments pe2
+         WHERE pe2.prospect_id = pse.prospect_id
+           AND pe2.status IN ('active', 'waiting_partner')
        )
        LIMIT ${parseInt(maxThisTick)}
        FOR UPDATE`
@@ -704,18 +721,49 @@ async function checkPartnerReplies() {
      AND pe.updated_at < DATE_SUB(NOW(), INTERVAL 4 HOUR)`
   );
 
+  // Cache of recent partner messages per agent mailbox, for the broken-thread
+  // fallback (e.g. Comcast rewrites the thread and the reply gets a NEW
+  // conversationId — conversationId match alone misses those replies).
+  const recentPartnerMsgs = new Map();
+
   for (const enrollment of enrollments) {
-    if (!enrollment.conversation_id) continue;
     try {
       const agentMailbox = enrollment.agent_smtp_user || enrollment.agent_email;
-      const partnerReplies = await getInboxByConversation({
-        email: agentMailbox,
-        conversationId: enrollment.conversation_id,
-        fromEmail: enrollment.partner_email,
-      });
+      let partnerMsg = null;
 
-      if (partnerReplies && partnerReplies.length > 0) {
-        const partnerMsg = partnerReplies[0];
+      if (enrollment.conversation_id) {
+        const partnerReplies = await getInboxByConversation({
+          email: agentMailbox,
+          conversationId: enrollment.conversation_id,
+          fromEmail: enrollment.partner_email,
+        });
+        if (partnerReplies && partnerReplies.length > 0) partnerMsg = partnerReplies[0];
+      }
+
+      // Fallback: match by partner sender + company name in a reply subject
+      if (!partnerMsg && enrollment.company) {
+        const cacheKey = `${agentMailbox}|${enrollment.partner_email}`;
+        if (!recentPartnerMsgs.has(cacheKey)) {
+          const { getRecentInboxFrom } = await import('./graph.js');
+          recentPartnerMsgs.set(cacheKey, await getRecentInboxFrom({
+            email: agentMailbox,
+            fromEmail: enrollment.partner_email,
+            sinceDays: 14,
+          }));
+        }
+        const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const companyNorm = norm(enrollment.company);
+        if (companyNorm) {
+          partnerMsg = recentPartnerMsgs.get(cacheKey).find(m =>
+            /^re:/i.test(m.subject || '') && norm(m.subject).includes(companyNorm)
+          ) || null;
+          if (partnerMsg) {
+            console.log(`[PartnerCadence] Fallback subject match (broken thread) for ${enrollment.first_name} ${enrollment.last_name}: "${partnerMsg.subject}"`);
+          }
+        }
+      }
+
+      if (partnerMsg) {
         await pool.execute(
           `UPDATE partner_enrollments
            SET current_step = 3, status = 'active',
@@ -726,7 +774,7 @@ async function checkPartnerReplies() {
         console.log(`[PartnerCadence] Partner ${enrollment.partner_name} replied for ${enrollment.first_name} ${enrollment.last_name} - ready for Step 3`);
       }
     } catch (err) {
-      console.error(`[PartnerCadence] Reply check error: ${err.message}`);
+      console.error(`[PartnerCadence] Reply check error (enrollment ${enrollment.id}, ${enrollment.first_name} ${enrollment.last_name}): ${err.message}`);
     }
   }
 }
@@ -789,6 +837,9 @@ async function processPartnerCadences() {
      JOIN partner_sequences ps ON ps.id = pe.sequence_id
      WHERE pe.status IN ('active', 'waiting_partner')
      AND ps.status = 'active'
+     -- Dead-status backstop: inbox actions set prospects.status but historically
+     -- only cancelled the DRIP enrollment; never send partner steps to dead leads
+     AND p.status NOT IN ('disqualified', 'unsubscribed', 'bounced', 'booked', 'handed_off')
      AND NOT EXISTS (
        SELECT 1 FROM sent_emails se
        WHERE se.prospect_id = pe.prospect_id
@@ -862,6 +913,20 @@ async function processPartnerCadences() {
 
       // ---- STEP TYPE: agent_send_cc (Step 1) ----
       if (step.step_type === 'agent_send_cc') {
+        // DUAL-TRACK GUARD: entering the partner cadence takes the prospect off the
+        // drip. A live drip alongside a partner thread produced duplicate intros
+        // (May-8 drip cohort re-introduced by the 7/8 partner release).
+        try {
+          const [dripCancel] = await pool.execute(
+            `UPDATE prospect_sequence_enrollment SET status = 'cancelled', completed_at = NOW()
+             WHERE prospect_id = ? AND status IN ('active', 'paused')`,
+            [enrollment.prospect_id]
+          );
+          if (dripCancel.affectedRows > 0) {
+            console.log(`[PartnerCadence] Cancelled ${dripCancel.affectedRows} drip enrollment(s) for ${enrollment.prospect_email} (now on partner track)`);
+          }
+        } catch (e) { console.error(`[PartnerCadence] drip-cancel guard: ${e.message}`); }
+
         // Pre-send verification (NeverBounce) before the partner intro goes out CC'ing the partner.
         // No-op if NEVERBOUNCE_API_KEY is unset. Blocks invalid/disposable and cancels the enrollment.
         if (!enrollment.email_status) {

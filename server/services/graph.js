@@ -105,20 +105,48 @@ export async function replyToMessage({ fromEmail, messageId, html, text }) {
 export async function getInboxByConversation({ email, conversationId, fromEmail }) {
   const client = getClient();
 
-  let filterStr = `conversationId eq '${conversationId}'`;
+  // Filter by conversationId ONLY. Graph rejects $filter on conversationId combined
+  // with $orderby on receivedDateTime ("restriction or sort order is too complex"),
+  // and $filter on from/emailAddress/address is unreliable on this tenant — both
+  // made this call throw on every scheduler tick, so partner replies were never
+  // detected. Match sender and sort client-side instead.
+  const messages = await client
+    .api(`/users/${email}/mailFolders/Inbox/messages`)
+    .filter(`conversationId eq '${conversationId}'`)
+    .select('id,subject,from,receivedDateTime,conversationId')
+    .top(20)
+    .get();
+
+  let results = messages.value || [];
   if (fromEmail) {
-    filterStr += ` and from/emailAddress/address eq '${fromEmail}'`;
+    results = results.filter(m =>
+      m.from?.emailAddress?.address?.toLowerCase() === fromEmail.toLowerCase()
+    );
   }
+  results.sort((a, b) => new Date(b.receivedDateTime) - new Date(a.receivedDateTime));
+  return results;
+}
+
+// Recent inbox messages from a specific sender. Filters by receivedDateTime only
+// ($filter+$orderby on the same property is the one combination Graph accepts here)
+// and matches the sender client-side — from/emailAddress/address filters are
+// unreliable on this tenant.
+export async function getRecentInboxFrom({ email, fromEmail, sinceDays = 14 }) {
+  const client = getClient();
+  const since = new Date();
+  since.setDate(since.getDate() - sinceDays);
 
   const messages = await client
     .api(`/users/${email}/mailFolders/Inbox/messages`)
-    .filter(filterStr)
+    .filter(`receivedDateTime ge ${since.toISOString()}`)
     .select('id,subject,from,receivedDateTime,conversationId')
-    .top(5)
+    .top(100)
     .orderby('receivedDateTime desc')
     .get();
 
-  return messages.value;
+  return (messages.value || []).filter(m =>
+    m.from?.emailAddress?.address?.toLowerCase() === fromEmail.toLowerCase()
+  );
 }
 
 // Get the most recent sent message to find its conversationId and messageId

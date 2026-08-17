@@ -207,9 +207,16 @@ router.put('/:id/action', async (req, res) => {
           [newStatus, email.prospect_id]
         );
 
-        // Cancel any active sequences
+        // Cancel any active sequences — BOTH tracks. Historically only the drip
+        // table was cancelled here, so disqualified/booked/handed-off prospects
+        // stayed live in the partner cadence and could get follow-ups later.
         await pool.execute(
           `UPDATE prospect_sequence_enrollment SET status = 'cancelled' WHERE prospect_id = ? AND status IN ('active', 'paused')`,
+          [email.prospect_id]
+        );
+        await pool.execute(
+          `UPDATE partner_enrollments SET status = 'cancelled', completed_at = NOW()
+           WHERE prospect_id = ? AND status IN ('active', 'waiting_partner', 'paused')`,
           [email.prospect_id]
         );
 
