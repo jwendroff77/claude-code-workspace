@@ -92,6 +92,7 @@ export default function SignalIntel() {
   const [scanning, setScanning] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
   const [actionFeedback, setActionFeedback] = useState(null);
+  const [partnerSeqs, setPartnerSeqs] = useState([]);
 
   // Filters
   const [triggerFilter, setTriggerFilter] = useState('');
@@ -126,6 +127,10 @@ export default function SignalIntel() {
   }
 
   useEffect(() => { loadData(); }, [triggerFilter, statusFilter, minScore, searchQuery]);
+
+  useEffect(() => {
+    api.getPartnerSequences().then(rows => setPartnerSeqs(rows || [])).catch(() => {});
+  }, []);
 
   const selected = leads.find(l => l.id === selectedId);
 
@@ -167,10 +172,11 @@ export default function SignalIntel() {
     }
   }
 
-  async function handleEnrollPartner(id) {
+  async function handleEnrollPartner(id, sequenceId) {
     try {
-      await api.enrollSignalIntelPartner(id);
-      showFeedback('Enrolled in partner cadence');
+      await api.enrollSignalIntelPartner(id, sequenceId);
+      const seq = partnerSeqs.find(ps => ps.id === Number(sequenceId));
+      showFeedback(seq ? `Enrolled — ${seq.partner_name} (${seq.agent_name})` : 'Enrolled in partner cadence');
       await loadData();
     } catch (err) {
       showFeedback(err.message || 'Partner enroll failed');
@@ -352,9 +358,9 @@ export default function SignalIntel() {
                             <UserPlus className="h-4 w-4" />
                           </button>
                           <button
-                            onClick={e => { e.stopPropagation(); handleEnrollPartner(lead.id); }}
+                            onClick={e => { e.stopPropagation(); setSelectedId(lead.id); }}
                             className="rounded-lg p-1.5 text-txt-tertiary hover:text-blue-400 hover:bg-blue-500/10 transition-colors"
-                            title="Enroll Partner Cadence"
+                            title="Choose Partner Cadence (Jared / Ed / Chad)"
                           >
                             <Handshake className="h-4 w-4" />
                           </button>
@@ -486,9 +492,25 @@ export default function SignalIntel() {
                 <Button variant="primary" className="w-full" onClick={() => handleEnroll(selected.id)}>
                   <UserPlus className="h-4 w-4" /> Enroll in Sequence
                 </Button>
-                <Button variant="secondary" className="w-full" onClick={() => handleEnrollPartner(selected.id)}>
-                  <Handshake className="h-4 w-4" /> Enroll Partner Cadence
-                </Button>
+                {partnerSeqs.length > 0 && (
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-txt-tertiary mb-1.5 mt-1">
+                      Enroll — Partner Cadence
+                    </p>
+                    <div className="space-y-1.5">
+                      {partnerSeqs.map(ps => (
+                        <Button
+                          key={ps.id}
+                          variant="secondary"
+                          className="w-full justify-start"
+                          onClick={() => handleEnrollPartner(selected.id, ps.id)}
+                        >
+                          <Handshake className="h-4 w-4" /> {ps.partner_name} <span className="text-txt-tertiary">({ps.agent_name})</span>
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <Button variant="danger" className="w-full" onClick={() => handleDismiss(selected.id)}>
                   <XCircle className="h-4 w-4" /> Dismiss
                 </Button>

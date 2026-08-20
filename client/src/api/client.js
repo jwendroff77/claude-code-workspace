@@ -130,5 +130,6 @@ export const api = {
   triggerSignalIntelScan: (data) => request('/signal-intel/scan', { method: 'POST', body: JSON.stringify(data || {}) }),
   dismissSignalIntelLead: (id) => request(`/signal-intel/${id}/dismiss`, { method: 'PUT' }),
   enrollSignalIntelLead: (id) => request(`/signal-intel/${id}/enroll`, { method: 'PUT' }),
-  enrollSignalIntelPartner: (id) => request(`/signal-intel/${id}/enroll-partner`, { method: 'PUT' }),
+  enrollSignalIntelPartner: (id, sequenceId) => request(`/signal-intel/${id}/enroll-partner`, { method: 'PUT', body: JSON.stringify({ sequence_id: sequenceId }) }),
+  getPartnerSequences: () => request('/partner-cadence'),
 };

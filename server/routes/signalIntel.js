@@ -246,16 +246,24 @@ router.put('/:id/enroll-partner', async (req, res) => {
       prospectId = result.insertId;
     }
 
-    // Find partner sequence, SDR agent (Megan), and partner agent (Jared)
-    const [partnerSeqs] = await pool.query(
-      "SELECT id, agent_id, partner_agent_id FROM partner_sequences WHERE status = 'active' LIMIT 1"
-    );
-
-    if (partnerSeqs.length === 0) {
-      return res.status(400).json({ error: 'No active partner sequence found' });
+    // Find partner sequence — caller picks which partner (Jared/Ed/Chad) via sequence_id;
+    // falls back to "first active" only if none was specified (back-compat).
+    const { sequence_id } = req.body;
+    let seq;
+    if (sequence_id) {
+      const [rows] = await pool.execute(
+        "SELECT id, agent_id, partner_agent_id FROM partner_sequences WHERE id = ? AND status = 'active'",
+        [sequence_id]
+      );
+      if (rows.length === 0) return res.status(400).json({ error: 'Partner sequence not found or inactive' });
+      seq = rows[0];
+    } else {
+      const [rows] = await pool.query(
+        "SELECT id, agent_id, partner_agent_id FROM partner_sequences WHERE status = 'active' LIMIT 1"
+      );
+      if (rows.length === 0) return res.status(400).json({ error: 'No active partner sequence found' });
+      seq = rows[0];
     }
-
-    const seq = partnerSeqs[0];
 
     // Enroll as PAUSED - partner cadence sends are manual only via /api/partner-cadence/send-next
     await pool.execute(
