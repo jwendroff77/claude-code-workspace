@@ -98,6 +98,68 @@ const RSS_SOURCES = [
     keywords: ['new jobs', 'new facility', 'expand', 'investment', 'economic development', 'creating jobs', 'new location'],
     exclude: ['school district', 'university', 'prison', 'detention'],
   },
+
+  // ── Vertical-targeted feeds ────────────────────────────────────────────────
+  // The generic feeds above surface whatever is in the news; these narrow to the
+  // ICP verticals the partner cadences actually sell into, so weekly auto-staging
+  // pulls from the right pool. `vertical` routes the lead to a partner sequence.
+
+  {
+    name: 'Google News',
+    trigger: 'new_facility',
+    vertical: 'senior_living',
+    url: 'https://news.google.com/rss/search?q=%22senior+living%22+OR+%22assisted+living%22+OR+%22skilled+nursing%22+opens+OR+expands+OR+%22breaks+ground%22+OR+acquires+when:14d&hl=en-US&gl=US&ceid=US:en',
+    keywords: ['senior living', 'assisted living', 'skilled nursing', 'retirement community', 'memory care', 'continuing care'],
+    exclude: ['obituary', 'lawsuit', 'abuse', 'citation', 'fined', 'closure', 'shuts down'],
+  },
+  {
+    name: 'Google News',
+    trigger: 'ma_acquisition',
+    vertical: 'senior_living',
+    url: 'https://news.google.com/rss/search?q=%22senior+living%22+OR+%22assisted+living%22+acquisition+OR+acquires+OR+portfolio+when:14d&hl=en-US&gl=US&ceid=US:en',
+    keywords: ['senior living', 'assisted living', 'skilled nursing', 'retirement community', 'acqui', 'portfolio'],
+    exclude: ['obituary', 'lawsuit', 'abuse', 'citation', 'fined'],
+  },
+  {
+    name: 'Google News',
+    trigger: 'new_facility',
+    vertical: 'healthcare',
+    url: 'https://news.google.com/rss/search?q=%22medical+group%22+OR+%22dental+group%22+OR+%22veterinary+group%22+OR+%22health+system%22+opens+OR+expands+OR+acquires+OR+%22new+clinic%22+when:14d&hl=en-US&gl=US&ceid=US:en',
+    keywords: ['medical group', 'dental group', 'veterinary', 'health system', 'new clinic', 'physician group', 'urgent care', 'ambulatory', 'multi-site'],
+    exclude: ['lawsuit', 'malpractice', 'settlement', 'indicted', 'fraud charges', 'university', 'school district'],
+  },
+  {
+    name: 'Google News',
+    trigger: 'ma_acquisition',
+    vertical: 'healthcare',
+    url: 'https://news.google.com/rss/search?q=%22medical+group%22+OR+%22dental+practice%22+OR+%22veterinary%22+acquisition+OR+%22adds+locations%22+OR+%22partners+with%22+when:14d&hl=en-US&gl=US&ceid=US:en',
+    keywords: ['medical group', 'dental', 'veterinary', 'physician group', 'acqui', 'adds locations', 'practice management'],
+    exclude: ['lawsuit', 'malpractice', 'settlement', 'fraud', 'university'],
+  },
+  {
+    name: 'Google News',
+    trigger: 'new_facility',
+    vertical: 'hospitality',
+    url: 'https://news.google.com/rss/search?q=hotel+OR+resort+%22opens%22+OR+%22breaks+ground%22+OR+%22renovation%22+OR+%22acquires%22+property+when:14d&hl=en-US&gl=US&ceid=US:en',
+    keywords: ['hotel', 'resort', 'hospitality', 'opens', 'renovation', 'breaks ground', 'property', 'casino resort'],
+    exclude: ['review', 'travel guide', 'best hotels', 'things to do', 'tripadvisor', 'deals on'],
+  },
+  {
+    name: 'Google News',
+    trigger: 'new_facility',
+    vertical: 'restaurant',
+    url: 'https://news.google.com/rss/search?q=%22restaurant+group%22+OR+franchisee+OR+%22multi-unit%22+opens+OR+expands+OR+%22new+locations%22+when:14d&hl=en-US&gl=US&ceid=US:en',
+    keywords: ['restaurant group', 'franchisee', 'multi-unit', 'new locations', 'opens', 'expansion', 'franchise group'],
+    exclude: ['recipe', 'review', 'best restaurants', 'where to eat', 'closes permanently', 'bankruptcy'],
+  },
+  {
+    name: 'Google News',
+    trigger: 'new_facility',
+    vertical: 'property_mgmt',
+    url: 'https://news.google.com/rss/search?q=%22property+management%22+OR+%22commercial+real+estate%22+acquires+OR+%22adds+to+portfolio%22+OR+%22breaks+ground%22+when:14d&hl=en-US&gl=US&ceid=US:en',
+    keywords: ['property management', 'commercial real estate', 'portfolio', 'acqui', 'breaks ground', 'multifamily', 'industrial park', 'office tower'],
+    exclude: ['home for sale', 'housing market', 'mortgage rates', 'residential listing', 'school district'],
+  },
 ];
 
 // Target titles for Apollo enrichment
@@ -231,6 +293,18 @@ function isBadCandidate(candidate) {
   // Contains common sentence fragments
   const fragments = [' to be ', ' closes ', ' rises ', ' tumble', ' triggers ', ' breaks ground', ' strikes '];
   if (fragments.some((f) => lower.includes(f))) return true;
+
+  // Ends on a dangling verb/auxiliary — the headline got cut mid-clause, so what
+  // survived is a sentence fragment, not a company ("Datavault AI Will",
+  // "Hanwha Defense USA seeks", "Sunoco LP to").
+  if (/\s(will|to|seeks?|plans?|says?|is|are|has|have|may|could|would|plans to|plans on|plans for|eyes|plots|weighs|nears|adds|sets|plans|expects?|reports?|announces?|and|with|after|amid|as|for|in|on|of)$/i.test(candidate.trim())) return true;
+
+  // Editorial/wire labels that survive into the fallback path. Matched only as a
+  // whole candidate or before a delimiter, so real names that merely start with
+  // one of these words (Live Nation, Analysis Group) still pass.
+  const EDITORIAL = '(exclusive|breaking|update|report|opinion|analysis|watch|live|video|photos?|just in|developing)';
+  if (new RegExp(`^${EDITORIAL}$`, 'i').test(candidate.trim())) return true;
+  if (new RegExp(`^${EDITORIAL}\\s*[:\\-|]`, 'i').test(candidate.trim())) return true;
 
   return false;
 }
@@ -431,6 +505,7 @@ export async function scanNewsSources() {
           age,
           sourceName: source.name,
           trigger: source.trigger,
+          vertical: source.vertical || null,
         });
       }
 
@@ -741,13 +816,14 @@ export async function runFullScan({ limit = 50 } = {}) {
 
       await pool.execute(
         `INSERT INTO signal_intel_leads
-         (company, city, state, industry, trigger_type, trigger_detail, trigger_headline, trigger_source, trigger_url, trigger_date, score, score_factors, contact_name, contact_title, contact_email, contact_phone, contact_linkedin, apollo_id, employee_count, revenue, source)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (company, city, state, industry, vertical, trigger_type, trigger_detail, trigger_headline, trigger_source, trigger_url, trigger_date, score, score_factors, contact_name, contact_title, contact_email, contact_phone, contact_linkedin, apollo_id, employee_count, revenue, source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           contact.company || companyName,
           contact.city || null,
           contact.state || null,
           contact.industry || null,
+          article.vertical || null,
           triggerType,
           article.description || null,
           article.title || null,
@@ -782,10 +858,11 @@ export async function runFullScan({ limit = 50 } = {}) {
 
       await pool.execute(
         `INSERT INTO signal_intel_leads
-         (company, trigger_type, trigger_detail, trigger_headline, trigger_source, trigger_url, trigger_date, score, score_factors, source)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (company, vertical, trigger_type, trigger_detail, trigger_headline, trigger_source, trigger_url, trigger_date, score, score_factors, source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           companyName,
+          article.vertical || null,
           triggerType,
           article.description || null,
           article.title || null,
@@ -818,18 +895,119 @@ export async function runFullScan({ limit = 50 } = {}) {
   return summary;
 }
 
-// ── Scheduler Integration ────────────────────────────────────────────────────
-// Signal Intel scan — daily at 7am CT (12pm UTC)
-// Uncomment in scheduler.js once integration is fully tested:
-//
-// import { runFullScan as runSignalIntelScan } from './signalIntel.js';
-//
-// cron.schedule('0 12 * * *', async () => {
-//   try {
-//     console.log('[Scheduler] Running daily Signal Intel scan...');
-//     const result = await runSignalIntelScan({ limit: 50 });
-//     console.log('[Scheduler] Signal Intel scan complete:', result);
-//   } catch (err) {
-//     console.error('[Scheduler] Signal Intel scan failed:', err);
-//   }
-// });
+// ── Weekly auto-staging ──────────────────────────────────────────────────────
+
+// Which partner cadence each vertical belongs to. Lanes are kept separate so two
+// reps never work the same account: property/CRE is Jared's, the operational
+// multi-site verticals are Ed's. Chad's MN gov/ed/childcare lane is deliberately
+// absent — these feeds don't source it, and gov/edu is filtered out upstream.
+const VERTICAL_TO_PARTNER_SEQUENCE = {
+  property_mgmt: 1,   // Megan + Jared
+  healthcare: 2,      // Lauren + Ed
+  senior_living: 2,
+  hospitality: 2,
+  restaurant: 2,
+};
+
+const AUTO_STAGE_MIN_SCORE = 85;
+
+/**
+ * Stage high-scoring signal-intel leads into their partner cadence as PAUSED
+ * step-1 enrollments. Nothing sends until a human releases them.
+ */
+export async function autoStageQualifiedLeads({ minScore = AUTO_STAGE_MIN_SCORE, limit = 40, dryRun = false } = {}) {
+  const [leads] = await pool.query(
+    `SELECT * FROM signal_intel_leads
+     WHERE status = 'new'
+       AND score >= ?
+       AND contact_email IS NOT NULL AND contact_email != ''
+       AND vertical IS NOT NULL
+     ORDER BY score DESC, created_at DESC
+     LIMIT ?`,
+    [minScore, limit]
+  );
+
+  const staged = [];
+  const skipped = [];
+
+  for (const lead of leads) {
+    const sequenceId = VERTICAL_TO_PARTNER_SEQUENCE[lead.vertical];
+    if (!sequenceId) {
+      skipped.push({ id: lead.id, company: lead.company, reason: `no partner lane for vertical ${lead.vertical}` });
+      continue;
+    }
+
+    const [[seq]] = await pool.query(
+      "SELECT id, agent_id, partner_agent_id FROM partner_sequences WHERE id = ? AND status = 'active'",
+      [sequenceId]
+    );
+    if (!seq) {
+      skipped.push({ id: lead.id, company: lead.company, reason: `sequence ${sequenceId} not active` });
+      continue;
+    }
+
+    const emailLower = lead.contact_email.toLowerCase();
+    const [[existing]] = await pool.query('SELECT id, status FROM prospects WHERE LOWER(email) = ?', [emailLower]);
+
+    // Never re-touch someone already suppressed or already being worked.
+    if (existing) {
+      const dead = ['disqualified', 'unsubscribed', 'bounced', 'booked', 'handed_off', 'replied', 'engaged'];
+      if (dead.includes(existing.status)) {
+        skipped.push({ id: lead.id, company: lead.company, reason: `prospect status ${existing.status}` });
+        continue;
+      }
+      const [[partnerEnr]] = await pool.query(
+        'SELECT id FROM partner_enrollments WHERE prospect_id = ? AND status != "cancelled"',
+        [existing.id]
+      );
+      // A prospect in both a drip and a partner cadence gets two near-identical
+      // intros (the 2026-07 dual-track incident), so a live drip blocks staging.
+      const [[dripEnr]] = await pool.query(
+        'SELECT id FROM prospect_sequence_enrollment WHERE prospect_id = ? AND status = "active"',
+        [existing.id]
+      );
+      if (partnerEnr || dripEnr) {
+        skipped.push({ id: lead.id, company: lead.company, reason: partnerEnr ? 'already in a partner cadence' : 'active drip enrollment' });
+        continue;
+      }
+    }
+
+    if (dryRun) {
+      staged.push({ id: lead.id, company: lead.company, score: lead.score, vertical: lead.vertical, sequenceId });
+      continue;
+    }
+
+    let prospectId = existing?.id;
+    if (!prospectId) {
+      const nameParts = (lead.contact_name || '').split(' ');
+      const triggerNote = `SIGNAL INTEL -- Trigger: ${lead.trigger_type} | ${(lead.trigger_headline || '').slice(0, 150)} | Source: ${lead.trigger_source || ''} | Score: ${lead.score}`;
+      const [result] = await pool.execute(
+        `INSERT INTO prospects (first_name, last_name, email, company, title, phone, linkedin_url, company_size, industry, city, state, apollo_id, source, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_sequence')`,
+        [
+          nameParts[0] || '', nameParts.slice(1).join(' ') || '',
+          lead.contact_email, lead.company || null, lead.contact_title || null,
+          lead.contact_phone || null, lead.contact_linkedin || null,
+          lead.employee_count || null, lead.industry || null,
+          lead.city || null, lead.state || null, lead.apollo_id || null,
+          `signal-intel-partner: ${triggerNote}`,
+        ]
+      );
+      prospectId = result.insertId;
+    }
+
+    await pool.execute(
+      `INSERT INTO partner_enrollments (prospect_id, sequence_id, agent_id, partner_agent_id, status, current_step)
+       VALUES (?, ?, ?, ?, 'paused', 1)`,
+      [prospectId, seq.id, seq.agent_id, seq.partner_agent_id]
+    );
+    await pool.execute(
+      "UPDATE signal_intel_leads SET status = 'enrolled', enrolled_prospect_id = ? WHERE id = ?",
+      [prospectId, lead.id]
+    );
+
+    staged.push({ id: lead.id, company: lead.company, score: lead.score, vertical: lead.vertical, sequenceId, prospectId });
+  }
+
+  return { staged, skipped, stagedCount: staged.length, skippedCount: skipped.length, dryRun };
+}

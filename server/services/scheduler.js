@@ -691,7 +691,37 @@ export function startScheduler() {
     }
   });
 
-  console.log('[Scheduler] Started — drip(3m), IMAP(5m), bounce(15m), hotAlerts(30m), autoPull(1h), scoring(1h), domainHealth(daily), partnerReplyCheck(5m)');
+  // Signal Intel — weekly scan + auto-stage, Monday 6am CT (11am UTC).
+  // Runs before the 8am send window so staged leads are ready to review that morning.
+  // Staging only ever writes PAUSED enrollments; releasing them stays manual.
+  cron.schedule('0 11 * * 1', async () => {
+    try {
+      const { runFullScan, autoStageQualifiedLeads } = await import('./signalIntel.js');
+      console.log('[Scheduler] Weekly Signal Intel scan starting...');
+      const scan = await runFullScan({ limit: 60 });
+      console.log('[Scheduler] Signal Intel scan complete:', scan);
+
+      const stage = await autoStageQualifiedLeads();
+      console.log(`[Scheduler] Signal Intel staged ${stage.stagedCount} lead(s) as PAUSED, skipped ${stage.skippedCount}`);
+
+      if (stage.stagedCount > 0) {
+        const { sendMail } = await import('./graph.js');
+        const lines = stage.staged
+          .map(s => `- ${s.company} (score ${s.score}, ${s.vertical}) -> ${s.sequenceId === 1 ? 'Jared' : 'Ed'}`)
+          .join('\n');
+        await sendMail({
+          fromEmail: 'mbarrett@1cloudnow.com',
+          to: process.env.OWNER_ALERT_EMAIL || 'jonathan@1cloudcommunications.com',
+          subject: `[Signal Intel] ${stage.stagedCount} new leads staged for review`,
+          html: `<p>The weekly scan staged ${stage.stagedCount} lead(s) as PAUSED step-1.  Nothing sends until you release them.</p><pre>${lines}</pre>`,
+        });
+      }
+    } catch (err) {
+      console.error('[Scheduler] Weekly Signal Intel job failed:', err);
+    }
+  });
+
+  console.log('[Scheduler] Started — drip(3m), IMAP(5m), bounce(15m), hotAlerts(30m), autoPull(1h), scoring(1h), domainHealth(daily), partnerReplyCheck(5m), signalIntel(weekly Mon)');
   console.log('[Scheduler] Partner cadence SENDING is MANUAL ONLY via /api/partner-cadence/send-next');
 }
 

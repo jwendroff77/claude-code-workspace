@@ -79,6 +79,8 @@ async function runSchemaPatches() {
     "ALTER TABLE received_emails ADD COLUMN cc_emails TEXT DEFAULT NULL AFTER from_email",
     // When a step's copy says a partner is CC'd, this flag makes the send actually CC them.
     "ALTER TABLE sequence_steps ADD COLUMN cc_partner TINYINT(1) NOT NULL DEFAULT 0",
+    // Which ICP vertical a signal-intel lead came from; routes weekly auto-staging to a partner.
+    "ALTER TABLE signal_intel_leads ADD COLUMN vertical VARCHAR(40) DEFAULT NULL",
   ];
   const { default: pool } = await import('./db/connection.js');
   for (const sql of patches) {
