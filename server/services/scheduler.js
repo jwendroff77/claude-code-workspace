@@ -521,7 +521,8 @@ function personalizeContent(content, prospect) {
     .replace(/\{\{firstName\}\}/g, prospect.first_name || '')
     .replace(/\{\{lastName\}\}/g, prospect.last_name || '')
     .replace(/\{\{company\}\}/g, prospect.company || '')
-    .replace(/\{\{email\}\}/g, prospect.email || '');
+    .replace(/\{\{email\}\}/g, prospect.email || '')
+    .replace(/\{\{industry\}\}/g, prospect.industry || '');
   // SAFETY NET: strip ANY remaining unfilled merge tags so {{anything}} never appears in sent email
   result = result.replace(/\{\{[^}]+\}\}/g, '');
   return result;
