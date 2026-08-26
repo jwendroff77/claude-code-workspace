@@ -218,7 +218,8 @@ async function processAgentQueue(agent) {
     const [candidates] = await connection.query(
       `SELECT pse.id, pse.prospect_id, pse.sequence_id, pse.current_step,
               pse.conversation_id, pse.last_message_id,
-              p.email, p.first_name, p.last_name, p.company, p.industry, p.email_status
+              p.email, p.first_name, p.last_name, p.company, p.industry, p.email_status,
+              p.source, p.signal_trigger_type, p.signal_headline
        FROM prospect_sequence_enrollment pse
        JOIN prospects p ON p.id = pse.prospect_id
        WHERE pse.agent_id = ${pool.escape(agent.id)} AND pse.status = 'active'
@@ -345,9 +346,17 @@ async function processAgentQueue(agent) {
     let subject = personalizeContent(useSubject, enrollment);
     let body = personalizeContent(useBody, enrollment);
 
-    // AI Personalization: generate unique opener for Step 1
+    // AI Personalization: Step 1 opener, SIGNAL INTEL LEADS ONLY.
+    // The opener exists to name the news trigger that made the lead worth contacting;
+    // an Apollo-sourced lead has no trigger, so it gets the plain copy instead of a
+    // generic AI line. Same detection the generator itself uses (columns, or the older
+    // "SIGNAL INTEL" source-field format).
     let aiOpener = null;
-    if (enrollment.current_step === 1) {
+    const hasSignalTrigger =
+      !!(enrollment.signal_trigger_type && enrollment.signal_headline) ||
+      /SIGNAL INTEL/i.test(enrollment.source || '');
+
+    if (enrollment.current_step === 1 && hasSignalTrigger) {
       try {
         // Check for cached opener first
         const [cachedRows] = await pool.execute(
@@ -366,15 +375,16 @@ async function processAgentQueue(agent) {
             [aiOpener, enrollment.prospect_id]
           );
         }
-
-        // Replace {{aiOpener}} tag only - never prepend
-        body = body.replace(/\{\{aiOpener\}\}/g, aiOpener);
       } catch (aiErr) {
         console.error(`[AI] Opener failed for ${enrollment.email}:`, aiErr.message);
-        // Remove unfilled tag if AI failed
-        body = body.replace(/\{\{aiOpener\}\}/g, '');
+        aiOpener = null;
       }
     }
+
+    // Fill the tag, or drop its whole paragraph so non-signal leads don't ship a blank gap.
+    body = aiOpener
+      ? body.replace(/\{\{aiOpener\}\}/g, aiOpener)
+      : body.replace(/<p>\s*\{\{aiOpener\}\}\s*<\/p>\s*/gi, '').replace(/\{\{aiOpener\}\}/g, '');
 
     try {
       // Random delay between emails: 45-120 seconds
