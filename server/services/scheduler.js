@@ -218,7 +218,7 @@ async function processAgentQueue(agent) {
     const [candidates] = await connection.query(
       `SELECT pse.id, pse.prospect_id, pse.sequence_id, pse.current_step,
               pse.conversation_id, pse.last_message_id,
-              p.email, p.first_name, p.last_name, p.company, p.email_status
+              p.email, p.first_name, p.last_name, p.company, p.industry, p.email_status
        FROM prospect_sequence_enrollment pse
        JOIN prospects p ON p.id = pse.prospect_id
        WHERE pse.agent_id = ${pool.escape(agent.id)} AND pse.status = 'active'
@@ -521,8 +521,13 @@ function personalizeContent(content, prospect) {
     .replace(/\{\{firstName\}\}/g, prospect.first_name || '')
     .replace(/\{\{lastName\}\}/g, prospect.last_name || '')
     .replace(/\{\{company\}\}/g, prospect.company || '')
-    .replace(/\{\{email\}\}/g, prospect.email || '')
-    .replace(/\{\{industry\}\}/g, prospect.industry || '');
+    .replace(/\{\{email\}\}/g, prospect.email || '');
+  // Industry: prospects sourced outside Apollo can have it blank, which would leave
+  // "the  industry" mid-sentence. Fall back to "your industry" so the copy still reads.
+  const industry = (prospect.industry || '').trim();
+  result = industry
+    ? result.replace(/\{\{industry\}\}/g, industry)
+    : result.replace(/the\s+\{\{industry\}\}\s+industry/gi, 'your industry');
   // SAFETY NET: strip ANY remaining unfilled merge tags so {{anything}} never appears in sent email
   result = result.replace(/\{\{[^}]+\}\}/g, '');
   return result;
