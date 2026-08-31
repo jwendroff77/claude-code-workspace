@@ -53,7 +53,16 @@ export async function verifyAndUpdate(prospectId) {
   const [rows] = await pool.execute('SELECT email FROM prospects WHERE id = ?', [prospectId]);
   if (rows.length === 0) return false;
 
-  const { result } = await verifyEmail(rows[0].email);
+  const { result, status } = await verifyEmail(rows[0].email);
+
+  // A skipped/errored check is NOT a verification. Writing its placeholder 'unknown'
+  // used to stamp email_verified_at anyway, which (a) made months of no-ops look like
+  // real checks and (b) permanently exempted those rows, since callers only verify when
+  // email_status IS NULL. Leave the record untouched so it gets checked for real later.
+  if (status !== 'verified') {
+    console.log(`[EmailVerify] ${rows[0].email} -> not verified (${status}) - leaving email_status unset`);
+    return true; // fail open: never block a send because verification was unavailable
+  }
 
   // Update prospect with verification result
   await pool.execute(
