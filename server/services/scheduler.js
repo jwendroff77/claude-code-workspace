@@ -290,6 +290,44 @@ async function processAgentQueue(agent) {
       } catch (e) { console.error(`[Verify] ${enrollment.email}:`, e.message); }
     }
 
+    // REPLY-STOP: never drop a scripted follow-up into a thread someone has replied to.
+    // The drip had no reply handling at all, so a partner or prospect reply got talked
+    // over minutes later in the same thread (Jared's Aug-28 reply-alls: 15 threads, one
+    // 8 minutes behind him). Pause and leave the thread to a human instead.
+    if (enrollment.current_step > 1 && enrollment.conversation_id) {
+      const agentMailbox = agent.smtp_user || agent.email;
+      try {
+        const inThread = await getInboxByConversation({
+          email: agentMailbox,
+          conversationId: enrollment.conversation_id,
+        });
+        const humanReplies = (inThread || []).filter(m => {
+          const from = (m.from?.emailAddress?.address || '').toLowerCase();
+          if (!from) return false;
+          if (/mailer-daemon|postmaster|microsoftexchange|noreply|no-reply/i.test(from)) return false;
+          return !from.endsWith('@1cloudnow.com'); // our own agents aren't a reply
+        });
+        if (humanReplies.length > 0) {
+          const who = humanReplies[0].from.emailAddress.address;
+          await pool.execute(
+            "UPDATE prospect_sequence_enrollment SET status = 'paused', paused_at = NOW() WHERE id = ?",
+            [enrollment.id]
+          );
+          console.log(`[ReplyStop] ${enrollment.email}: reply from ${who} on this thread - drip PAUSED at step ${enrollment.current_step}`);
+          continue;
+        }
+      } catch (replyErr) {
+        // Fail CLOSED. A missed check would resume talking over replies, which is the
+        // exact failure this guards; skipping a tick only delays the send.
+        console.error(`[ReplyStop] check failed for ${enrollment.email}: ${replyErr.message} - skipping this tick`);
+        await pool.execute(
+          "UPDATE prospect_sequence_enrollment SET status = 'active' WHERE id = ?",
+          [enrollment.id]
+        );
+        continue;
+      }
+    }
+
     // Get the current step content
     const [steps] = await pool.execute(
       `SELECT * FROM sequence_steps
