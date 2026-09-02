@@ -79,10 +79,14 @@ router.post('/', async (req, res) => {
 
     if (!email) return res.status(400).json({ error: 'Email is required' });
 
+    // mysql2 rejects `undefined` bind params ("must not contain undefined"), so any
+    // omitted optional field crashed this route with a 500. Coerce to null.
+    const nz = (v) => (v === undefined ? null : v);
+
     const [result] = await pool.execute(
       `INSERT INTO prospects (first_name, last_name, email, company, title, phone, linkedin_url, source)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [first_name, last_name, email, company, title, phone, linkedin_url, source || 'manual']
+      [nz(first_name), nz(last_name), email, nz(company), nz(title), nz(phone), nz(linkedin_url), source || 'manual']
     );
 
     const [rows] = await pool.execute('SELECT * FROM prospects WHERE id = ?', [result.insertId]);
