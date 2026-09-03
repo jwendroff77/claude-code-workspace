@@ -929,6 +929,13 @@ async function processPartnerCadences() {
      JOIN partner_sequences ps ON ps.id = pe.sequence_id
      WHERE pe.status IN ('active', 'waiting_partner')
      AND ps.status = 'active'
+     -- Hard per-agent daily ceiling: no agent sends more than 100 emails/day,
+     -- counting drip AND partner-cadence together (both write to sent_emails).
+     -- Drip already self-limits via agents.daily_send_limit (40-46), but partner
+     -- cadence had no ceiling at all -- an agent's combined total could run
+     -- unbounded. 100 is a hard safety cap, not the per-channel target.
+     AND (SELECT COUNT(*) FROM sent_emails se_cap
+          WHERE se_cap.agent_id = pe.agent_id AND DATE(se_cap.sent_at) = CURDATE()) < 100
      -- Dead-status backstop: inbox actions set prospects.status but historically
      -- only cancelled the DRIP enrollment; never send partner steps to dead leads
      AND p.status NOT IN ('disqualified', 'unsubscribed', 'bounced', 'booked', 'handed_off')
