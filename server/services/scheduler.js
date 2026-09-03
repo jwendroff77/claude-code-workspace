@@ -883,7 +883,14 @@ async function processPartnerCadences() {
     return; // 8am-5pm CT only
   }
 
-  // Gap guard: minimum 4 minutes between partner cadence sends
+  // Gap guard: minimum 1 minute between partner cadence sends (was 4 minutes,
+  // sized for the old 1-send-per-tick model). At LIMIT 3/tick, a batch's last
+  // item can land close to the next 5-minute cron firing, and a 4-minute floor
+  // measured from that single most-recent send was intermittently skipping the
+  // very next tick entirely -- observed live 2026-09-03: throughput dropped
+  // well below the intended ~36/hr because whole ticks were no-op'ing. The
+  // per-item 15-75s jitter inside the send loop, plus the per-prospect
+  // same-day dedup below, already cover the reasons this guard exists.
   const [lastSendRows] = await pool.query(
     `SELECT MAX(se.sent_at) AS last_sent FROM sent_emails se
      JOIN partner_enrollments pe ON pe.prospect_id = se.prospect_id AND pe.agent_id = se.agent_id
@@ -891,7 +898,7 @@ async function processPartnerCadences() {
   );
   if (lastSendRows[0].last_sent) {
     const minsSinceLast = (now - new Date(lastSendRows[0].last_sent)) / 60000;
-    if (minsSinceLast < 4) return;
+    if (minsSinceLast < 1) return;
   }
 
   // GLOBAL LOCK: prevent concurrent execution if multiple server instances are running
