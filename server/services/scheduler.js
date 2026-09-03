@@ -883,23 +883,12 @@ async function processPartnerCadences() {
     return; // 8am-5pm CT only
   }
 
-  // Gap guard: minimum 1 minute between partner cadence sends (was 4 minutes,
-  // sized for the old 1-send-per-tick model). At LIMIT 3/tick, a batch's last
-  // item can land close to the next 5-minute cron firing, and a 4-minute floor
-  // measured from that single most-recent send was intermittently skipping the
-  // very next tick entirely -- observed live 2026-09-03: throughput dropped
-  // well below the intended ~36/hr because whole ticks were no-op'ing. The
-  // per-item 15-75s jitter inside the send loop, plus the per-prospect
-  // same-day dedup below, already cover the reasons this guard exists.
-  const [lastSendRows] = await pool.query(
-    `SELECT MAX(se.sent_at) AS last_sent FROM sent_emails se
-     JOIN partner_enrollments pe ON pe.prospect_id = se.prospect_id AND pe.agent_id = se.agent_id
-     WHERE DATE(se.sent_at) = CURDATE()`
-  );
-  if (lastSendRows[0].last_sent) {
-    const minsSinceLast = (now - new Date(lastSendRows[0].last_sent)) / 60000;
-    if (minsSinceLast < 1) return;
-  }
+  // A cross-agent "minimum gap since the last send from ANYONE" guard used to
+  // live here. Removed 2026-09-03: it made Lauren wait on Megan's pace even
+  // though they're different mailboxes with no shared rate limit -- Ed's queue
+  // was starving behind Jared's for no real reason. Per-item 15-75s jitter in
+  // the send loop, the per-prospect same-day dedup, and the per-agent 100/day
+  // cap already cover what this was protecting against.
 
   // GLOBAL LOCK: prevent concurrent execution if multiple server instances are running
   const lockConn = await pool.getConnection();
@@ -911,24 +900,30 @@ async function processPartnerCadences() {
   }
 
   try {
-  // Up to 3 per tick (~36/hr within the 8am-5pm CT window). Was LIMIT 1, copied
-  // from the drip scheduler's pacing when this function was first built -- that
-  // throttle exists to spread COLD first-touch emails across the day; it was
-  // never a deliberate choice for partner-cadence follow-ups, which are threaded
-  // replies into conversations the partner already engaged. At 1/tick, demand
-  // routinely exceeds the ~108 sends/day the window allows and rolls to the next
-  // business day even when nothing is actually wrong. Window, lock, and the
-  // 4-minute gap guard above are unchanged -- this only raises how many sendable
-  // enrollments one tick picks up.
+  // Up to 3 per AGENT per tick (was: 3 total across ALL agents combined, before
+  // that 1 total -- both inherited from the drip scheduler's single-mailbox
+  // pacing and never rethought for partner cadence, where different agents are
+  // different mailboxes with no shared rate limit). A global limit meant
+  // whichever agent had the oldest partner reply -- Jared's, ordered ahead of
+  // Ed's Sep-1 replies -- filled every slot every tick and Ed's queue never
+  // got picked up at all. Observed live 2026-09-03: Jared-only sends for 50+
+  // minutes straight while 92 due Ed follow-ups sat untouched. Partitioning by
+  // agent_id gives each agent their own top-3, so agents run in parallel
+  // instead of competing for one shared queue.
   const [enrollments] = await pool.query(
-    `SELECT pe.*, p.email AS prospect_email, p.first_name, p.last_name, p.company,
-            p.industry, p.city, p.state, p.title AS prospect_title,
-            p.signal_trigger_type, p.signal_headline, p.intent_score, p.email_status,
-            p.personalized_opener AS stored_opener,
-            a.name AS agent_name, a.smtp_user AS agent_smtp_user, a.email AS agent_email,
-            a.persona_voice AS agent_persona,
-            pa.name AS partner_name, pa.email AS partner_email,
-            ps.name AS sequence_name
+    `SELECT * FROM (
+       SELECT pe.*, p.email AS prospect_email, p.first_name, p.last_name, p.company,
+              p.industry, p.city, p.state, p.title AS prospect_title,
+              p.signal_trigger_type, p.signal_headline, p.intent_score, p.email_status,
+              p.personalized_opener AS stored_opener,
+              a.name AS agent_name, a.smtp_user AS agent_smtp_user, a.email AS agent_email,
+              a.persona_voice AS agent_persona,
+              pa.name AS partner_name, pa.email AS partner_email,
+              ps.name AS sequence_name,
+              ROW_NUMBER() OVER (
+                PARTITION BY pe.agent_id
+                ORDER BY pe.partner_replied_at ASC, pe.current_step DESC, pe.enrolled_at ASC
+              ) AS agent_rn
      FROM partner_enrollments pe
      JOIN prospects p ON p.id = pe.prospect_id
      JOIN agents a ON a.id = pe.agent_id
@@ -968,8 +963,9 @@ async function processPartnerCadences() {
          AND pss2.step_number = pe.current_step
          AND pss2.step_type IN ('agent_send_cc', 'agent_followup')
      )
-     ORDER BY pe.partner_replied_at ASC, pe.current_step DESC, pe.enrolled_at ASC
-     LIMIT 3`
+     ) ranked
+     WHERE agent_rn <= 3
+     ORDER BY partner_replied_at ASC, current_step DESC, enrolled_at ASC`
   );
 
   for (const enrollment of enrollments) {
