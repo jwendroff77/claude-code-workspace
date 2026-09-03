@@ -904,7 +904,15 @@ async function processPartnerCadences() {
   }
 
   try {
-  // Get all active partner enrollments — LIMIT 1 per tick for drip sending
+  // Up to 3 per tick (~36/hr within the 8am-5pm CT window). Was LIMIT 1, copied
+  // from the drip scheduler's pacing when this function was first built -- that
+  // throttle exists to spread COLD first-touch emails across the day; it was
+  // never a deliberate choice for partner-cadence follow-ups, which are threaded
+  // replies into conversations the partner already engaged. At 1/tick, demand
+  // routinely exceeds the ~108 sends/day the window allows and rolls to the next
+  // business day even when nothing is actually wrong. Window, lock, and the
+  // 4-minute gap guard above are unchanged -- this only raises how many sendable
+  // enrollments one tick picks up.
   const [enrollments] = await pool.query(
     `SELECT pe.*, p.email AS prospect_email, p.first_name, p.last_name, p.company,
             p.industry, p.city, p.state, p.title AS prospect_title,
@@ -947,7 +955,7 @@ async function processPartnerCadences() {
          AND pss2.step_type IN ('agent_send_cc', 'agent_followup')
      )
      ORDER BY pe.partner_replied_at ASC, pe.current_step DESC, pe.enrolled_at ASC
-     LIMIT 1`
+     LIMIT 3`
   );
 
   for (const enrollment of enrollments) {
