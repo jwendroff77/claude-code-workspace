@@ -169,29 +169,121 @@ router.get('/queue-today', async (req, res) => {
   }
 });
 
-// POST /remove-from-queue - remove a prospect from ALL active sequences (100% stop)
-router.post('/remove-from-queue', async (req, res) => {
+// GET /prospect-search?q= - find ANY prospect by person name, email, or company.
+// Not limited to today's queue: this is how you locate someone at step 5 next week.
+router.get('/prospect-search', async (req, res) => {
   try {
-    const { prospect_id } = req.body;
-    if (!prospect_id) return res.status(400).json({ error: 'prospect_id required' });
+    const q = (req.query.q || '').trim();
+    if (q.length < 2) return res.json({ query: q, count: 0, results: [] });
+    const like = `%${q}%`;
 
-    // Cancel every active partner enrollment for this prospect
-    await pool.execute(
-      `UPDATE partner_enrollments
-       SET status = 'cancelled', updated_at = NOW()
-       WHERE prospect_id = ? AND status IN ('active','waiting_partner','paused')`,
-      [prospect_id]
+    const [results] = await pool.query(
+      `SELECT p.id AS prospect_id, p.first_name, p.last_name, p.email, p.company,
+              p.title, p.status, a.name AS agent,
+              (SELECT COUNT(*) FROM partner_enrollments pe
+                WHERE pe.prospect_id = p.id
+                  AND pe.status IN ('active','waiting_partner','paused')) AS active_partner,
+              (SELECT COUNT(*) FROM enrollments e
+                WHERE e.prospect_id = p.id
+                  AND e.status IN ('active','paused')) AS active_drip,
+              (SELECT COUNT(*) FROM prospect_sequence_enrollment pse
+                WHERE pse.prospect_id = p.id
+                  AND pse.status IN ('active','paused')) AS active_pse,
+              (SELECT MAX(pe.current_step) FROM partner_enrollments pe
+                WHERE pe.prospect_id = p.id
+                  AND pe.status IN ('active','waiting_partner','paused')) AS step,
+              (SELECT MAX(se.sent_at) FROM sent_emails se WHERE se.prospect_id = p.id) AS last_sent,
+              EXISTS (SELECT 1 FROM exclusion_list x WHERE x.email = p.email) AS excluded
+         FROM prospects p
+         LEFT JOIN agents a ON a.id = p.assigned_agent_id
+        WHERE p.first_name LIKE ?
+           OR p.last_name LIKE ?
+           OR CONCAT(p.first_name, ' ', p.last_name) LIKE ?
+           OR p.email LIKE ?
+           OR p.company LIKE ?
+        ORDER BY p.company, p.last_name, p.first_name
+        LIMIT 100`,
+      [like, like, like, like, like]
     );
 
-    // Stop drip sequence
-    await pool.execute(
-      `UPDATE prospects SET status = 'unsubscribed' WHERE id = ?`,
-      [prospect_id]
-    );
-
-    res.json({ success: true });
+    res.json({ query: q, count: results.length, results });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /remove-from-queue - full stop for one prospect.
+// Cancels EVERY enrollment (partner + both drip tables), marks the prospect
+// unsubscribed, and adds them to exclusion_list so a future import or Apollo
+// pull cannot re-enroll them.  All of it in one transaction.
+router.post('/remove-from-queue', async (req, res) => {
+  const { prospect_id, reason } = req.body;
+  if (!prospect_id) return res.status(400).json({ error: 'prospect_id required' });
+
+  const conn = await pool.getConnection();
+  try {
+    const [[prospect]] = await conn.query('SELECT * FROM prospects WHERE id = ?', [prospect_id]);
+    if (!prospect) return res.status(404).json({ error: 'prospect not found' });
+
+    const why = (reason || '').trim() || 'Removed from cadence via portal';
+    const NOT_DONE = "status NOT IN ('cancelled','completed')";
+
+    await conn.beginTransaction();
+
+    const [partner] = await conn.execute(
+      `UPDATE partner_enrollments SET status = 'cancelled', completed_at = NOW(), updated_at = NOW()
+        WHERE prospect_id = ? AND ${NOT_DONE}`,
+      [prospect_id]
+    );
+    const [drip] = await conn.execute(
+      `UPDATE enrollments SET status = 'cancelled', completed_at = NOW()
+        WHERE prospect_id = ? AND ${NOT_DONE}`,
+      [prospect_id]
+    );
+    const [pse] = await conn.execute(
+      `UPDATE prospect_sequence_enrollment SET status = 'cancelled', completed_at = NOW()
+        WHERE prospect_id = ? AND ${NOT_DONE}`,
+      [prospect_id]
+    );
+    await conn.execute(
+      "UPDATE prospects SET status = 'unsubscribed', updated_at = NOW() WHERE id = ?",
+      [prospect_id]
+    );
+
+    let addedToExclusionList = false;
+    if (prospect.email) {
+      const [[dupe]] = await conn.query('SELECT id FROM exclusion_list WHERE email = ?', [prospect.email]);
+      if (!dupe) {
+        await conn.execute(
+          'INSERT INTO exclusion_list (email, company, reason, added_at) VALUES (?, ?, ?, NOW())',
+          [prospect.email, prospect.company, why]
+        );
+        addedToExclusionList = true;
+      }
+    }
+
+    await conn.execute(
+      `INSERT INTO pipeline_events (prospect_id, from_status, to_status, notes)
+       VALUES (?, ?, 'unsubscribed', ?)`,
+      [prospect_id, prospect.status, why]
+    );
+
+    await conn.commit();
+
+    res.json({
+      success: true,
+      prospect_id,
+      email: prospect.email,
+      partner_cancelled: partner.affectedRows,
+      drip_cancelled: drip.affectedRows + pse.affectedRows,
+      added_to_exclusion_list: addedToExclusionList,
+      already_on_exclusion_list: !addedToExclusionList && !!prospect.email,
+    });
+  } catch (err) {
+    try { await conn.rollback(); } catch { /* already rolled back */ }
+    res.status(500).json({ error: err.message });
+  } finally {
+    conn.release();
   }
 });
 

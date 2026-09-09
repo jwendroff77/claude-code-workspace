@@ -14,6 +14,7 @@ import {
   CheckSquare,
   Radar,
   CalendarClock,
+  UserSearch,
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -26,6 +27,7 @@ const nav = [
   { to: '/sent', icon: Send, label: 'Sent Emails' },
   { to: '/partner-cadence', icon: Handshake, label: 'Partner Cadence' },
   { to: '/queue', icon: CalendarClock, label: "Today's Queue" },
+  { to: '/find', icon: UserSearch, label: 'Find a Prospect' },
   { to: '/tasks', icon: CheckSquare, label: 'Task Queue' },
   { to: '/pipeline', icon: KanbanSquare, label: 'Pipeline' },
   { to: '/analytics', icon: BarChart3, label: 'Analytics' },

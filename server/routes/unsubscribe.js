@@ -80,7 +80,7 @@ router.get('/:token', async (req, res) => {
 
     // Add to exclusion list
     await pool.execute(
-      `INSERT INTO exclusion_list (email, company, reason, created_at)
+      `INSERT INTO exclusion_list (email, company, reason, added_at)
        SELECT ?, ?, 'Unsubscribed via email link', NOW()
        FROM dual WHERE NOT EXISTS (SELECT 1 FROM exclusion_list WHERE email = ?)`,
       [prospect.email, prospect.company, prospect.email]

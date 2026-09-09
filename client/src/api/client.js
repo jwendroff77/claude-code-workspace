@@ -31,7 +31,8 @@ export const api = {
   getDashboardAgents: () => request('/dashboard/agents'),
   getAttentionFeed: () => request('/dashboard/attention'),
   getQueueToday: () => request('/dashboard/queue-today'),
-  removeFromQueue: (prospectId) => request('/dashboard/remove-from-queue', { method: 'POST', body: JSON.stringify({ prospect_id: prospectId }) }),
+  removeFromQueue: (prospectId, reason) => request('/dashboard/remove-from-queue', { method: 'POST', body: JSON.stringify({ prospect_id: prospectId, reason }) }),
+  searchProspects: (q) => request(`/dashboard/prospect-search?q=${encodeURIComponent(q)}`),
 
   // Agents
   getAgents: () => request('/agents'),
