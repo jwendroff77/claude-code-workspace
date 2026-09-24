@@ -7,6 +7,7 @@ const titles = {
   '/cadences': 'Cadence Builder',
   '/inbox': 'Unified Inbox',
   '/pipeline': 'Pipeline',
+  '/quotes': 'Quote Summary',
   '/lists': 'List Manager',
   '/settings': 'Settings',
 };

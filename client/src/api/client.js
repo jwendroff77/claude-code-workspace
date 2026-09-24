@@ -25,6 +25,32 @@ async function request(path, options = {}) {
   return res.json();
 }
 
+// For endpoints that take a raw body or return a file instead of JSON.
+async function requestRaw(path, { body, contentType = 'application/json' } = {}) {
+  const token = localStorage.getItem('token');
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': contentType,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body,
+  });
+
+  if (res.status === 401) {
+    localStorage.removeItem('token');
+    window.location.reload();
+    return;
+  }
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(error.error || 'API request failed');
+  }
+
+  return res;
+}
+
 export const api = {
   // Dashboard
   getDashboardMetrics: () => request('/dashboard/metrics'),
@@ -133,4 +159,12 @@ export const api = {
   enrollSignalIntelLead: (id) => request(`/signal-intel/${id}/enroll`, { method: 'PUT' }),
   enrollSignalIntelPartner: (id, sequenceId) => request(`/signal-intel/${id}/enroll-partner`, { method: 'PUT', body: JSON.stringify({ sequence_id: sequenceId }) }),
   getPartnerSequences: () => request('/partner-cadence'),
+
+  // Quote Summary
+  parseQuoteFile: async (file) =>
+    (await requestRaw('/quotes/parse', { body: file, contentType: 'application/octet-stream' })).json(),
+  getQuotePdf: async (quote, { download = false } = {}) =>
+    (await requestRaw(`/quotes/pdf${download ? '?download=1' : ''}`, { body: JSON.stringify({ quote }) })).blob(),
+  getQuoteSenders: () => request('/quotes/senders'),
+  emailQuote: (data) => request('/quotes/email', { method: 'POST', body: JSON.stringify(data) }),
 };

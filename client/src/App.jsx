@@ -17,6 +17,7 @@ import TaskQueue from './pages/TaskQueue';
 import SignalIntel from './pages/SignalIntel';
 import TodayQueue from './pages/TodayQueue';
 import ProspectSearch from './pages/ProspectSearch';
+import QuoteSummary from './pages/QuoteSummary';
 
 export default function App() {
   const [token, setToken] = useState(() => localStorage.getItem('token'));
@@ -44,6 +45,7 @@ export default function App() {
         <Route path="/sent" element={<SentEmails />} />
         <Route path="/partner-cadence" element={<PartnerCadence />} />
         <Route path="/pipeline" element={<Pipeline />} />
+        <Route path="/quotes" element={<QuoteSummary />} />
         <Route path="/signal-intel" element={<SignalIntel />} />
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/tasks" element={<TaskQueue />} />

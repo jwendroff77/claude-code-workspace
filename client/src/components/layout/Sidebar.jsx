@@ -15,6 +15,7 @@ import {
   Radar,
   CalendarClock,
   UserSearch,
+  FileText,
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -30,6 +31,7 @@ const nav = [
   { to: '/find', icon: UserSearch, label: 'Find a Prospect' },
   { to: '/tasks', icon: CheckSquare, label: 'Task Queue' },
   { to: '/pipeline', icon: KanbanSquare, label: 'Pipeline' },
+  { to: '/quotes', icon: FileText, label: 'Quote Summary' },
   { to: '/analytics', icon: BarChart3, label: 'Analytics' },
   { to: '/lists', icon: ListChecks, label: 'Lists' },
   { to: '/settings', icon: Settings, label: 'Settings' },

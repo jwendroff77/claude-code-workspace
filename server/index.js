@@ -27,6 +27,7 @@ import analyticsRoutes from './routes/analytics.js';
 import abRoutes from './routes/ab.js';
 import taskRoutes from './routes/tasks.js';
 import signalIntelRoutes from './routes/signalIntel.js';
+import quoteRoutes from './routes/quotes.js';
 import { startScheduler } from './services/scheduler.js';
 
 const app = express();
@@ -59,6 +60,7 @@ app.use('/api/analytics', analyticsRoutes);
 app.use('/api/ab', abRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/signal-intel', signalIntelRoutes);
+app.use('/api/quotes', quoteRoutes);
 
 // Serve React build in production
 const clientDist = join(__dirname, '..', 'client', 'dist');

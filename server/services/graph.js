@@ -23,7 +23,8 @@ function getClient() {
 
 // Send email via Microsoft Graph API as a specific agent
 // cc is optional — existing calls don't pass it and behavior is unchanged
-export async function sendMail({ fromEmail, to, cc, bcc, subject, html, text, unsubscribeUrl }) {
+// to may be a single address or an array; attachments are [{ name, contentType, content: Buffer }]
+export async function sendMail({ fromEmail, to, cc, bcc, subject, html, text, unsubscribeUrl, attachments }) {
   // ABSOLUTE LAST DEFENSE: never send merge tags to a real person
   if (html && html.includes('{{')) {
     html = html.replace(/\{\{[^}]+\}\}/g, '');
@@ -41,11 +42,9 @@ export async function sendMail({ fromEmail, to, cc, bcc, subject, html, text, un
       contentType: html ? 'HTML' : 'Text',
       content: html || text,
     },
-    toRecipients: [
-      {
-        emailAddress: { address: to },
-      },
-    ],
+    toRecipients: (Array.isArray(to) ? to : [to]).map((addr) => ({
+      emailAddress: { address: addr },
+    })),
   };
 
   // Partner cadence support: add CC recipients if provided
@@ -61,6 +60,15 @@ export async function sendMail({ fromEmail, to, cc, bcc, subject, html, text, un
     const bccList = Array.isArray(bcc) ? bcc : [bcc];
     message.bccRecipients = bccList.map((addr) => ({
       emailAddress: { address: addr },
+    }));
+  }
+
+  if (attachments?.length) {
+    message.attachments = attachments.map((a) => ({
+      '@odata.type': '#microsoft.graph.fileAttachment',
+      name: a.name,
+      contentType: a.contentType || 'application/octet-stream',
+      contentBytes: Buffer.from(a.content).toString('base64'),
     }));
   }
 
