@@ -887,9 +887,10 @@ async function processPartnerCadences() {
 
   // Per-agent pacing: at most 1 send per agent per tick (ticks run every minute),
   // and only when that agent's last email of ANY kind (drip or partner) is at
-  // least a random 3-5 minutes old.  Jonathan's rule: 3-5 min random gaps on
-  // every partner send.  Replaces 3-per-agent-per-tick with 15-75s jitter.
-  const gapSec = 180 + Math.floor(Math.random() * 121);
+  // least 2 minutes old.  Ticks are a minute apart, so the real gap lands at
+  // 2-3 min depending on where the tick falls.  Jonathan set 2-3 min gaps on
+  // 2026-10-07 (was 3-5).  The old 15-75s pre-send sleep is gone: it stretched gaps.
+  const gapSec = 120;
 
   // A cross-agent "minimum gap since the last send from ANYONE" guard used to
   // live here. Removed 2026-09-03: it made Lauren wait on Megan's pace even
@@ -1078,9 +1079,6 @@ async function processPartnerCadences() {
         body = personalizeContent(body, enrollment);
         const subject = personalizeContent(step.subject_line, enrollment);
 
-        // Random delay for natural sending
-        const delaySec = Math.floor(Math.random() * 60) + 15;
-        await randomDelay(delaySec * 1000, delaySec * 1000);
 
         // BCC Jonathan ONLY on the Baird Medical step-1 TEST send (enrollment 1032).
         // Scoped to the test so the rest of the Ed batch is NOT BCC'd. Remove after test confirmed.
@@ -1190,10 +1188,6 @@ async function processPartnerCadences() {
       else if (step.step_type === 'agent_followup' && enrollment.status === 'active') {
         const body = personalizeContent(step.body_html, enrollment);
         const fromEmail = enrollment.agent_smtp_user || enrollment.agent_email;
-
-        // Random delay
-        const delaySec = Math.floor(Math.random() * 60) + 15;
-        await randomDelay(delaySec * 1000, delaySec * 1000);
 
         // Try to reply in the same thread using the last message ID
         if (enrollment.last_message_id) {
