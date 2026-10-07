@@ -66,6 +66,14 @@ function isInSendWindow(agent) {
   return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
 }
 
+// Partner cadence window: 8:00am-4:55pm Central, DST-aware (Intl handles CDT/CST).
+// Replaces a fixed UTC-5 offset that would have started sends at 7am CT after DST ends.
+function inPartnerWindow() {
+  const ct = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' }));
+  const mins = ct.getHours() * 60 + ct.getMinutes();
+  return mins >= 8 * 60 && mins < 16 * 60 + 55;
+}
+
 // Get minutes remaining in send window
 function minutesLeftInWindow(agent) {
   const now = new Date();
@@ -682,7 +690,7 @@ export function startScheduler() {
 
   // =====================================================
   // PARTNER CADENCE — RE-ENABLED for Ed + Lauren Signal Intel sends
-  cron.schedule('*/5 * * * *', async () => {
+  cron.schedule('* * * * *', async () => {
     try {
       await processPartnerCadences();
     } catch (err) {
@@ -789,9 +797,7 @@ async function checkPartnerReplies() {
   const todayIdx = new Date().getDay();
   if (todayIdx < 1 || todayIdx > 5) return; // Mon-Fri only
 
-  const now = new Date();
-  const ctHour = (now.getUTCHours() + 24 - 5) % 24;
-  if (ctHour < 8 || ctHour >= 17) return; // 8am-5pm CT only
+  if (!inPartnerWindow()) return; // 8am-4:55pm CT only
 
   const [enrollments] = await pool.query(
     `SELECT pe.*, p.email AS prospect_email, p.first_name, p.last_name,
@@ -875,13 +881,15 @@ async function processPartnerCadences() {
     return; // Mon-Fri only
   }
 
-  const now = new Date();
-  const ctOffset = -5; // CT (CDT is -5, CST is -6 — close enough for window guard)
-  const ctHour = (now.getUTCHours() + 24 + ctOffset) % 24;
-  const ctMinute = now.getUTCMinutes();
-  if (ctHour < 8 || ctHour >= 17) {
-    return; // 8am-5pm CT only
+  if (!inPartnerWindow()) {
+    return; // 8am-4:55pm CT only
   }
+
+  // Per-agent pacing: at most 1 send per agent per tick (ticks run every minute),
+  // and only when that agent's last email of ANY kind (drip or partner) is at
+  // least a random 3-5 minutes old.  Jonathan's rule: 3-5 min random gaps on
+  // every partner send.  Replaces 3-per-agent-per-tick with 15-75s jitter.
+  const gapSec = 180 + Math.floor(Math.random() * 121);
 
   // A cross-agent "minimum gap since the last send from ANYONE" guard used to
   // live here. Removed 2026-09-03: it made Lauren wait on Megan's pace even
@@ -941,6 +949,12 @@ async function processPartnerCadences() {
      -- Dead-status backstop: inbox actions set prospects.status but historically
      -- only cancelled the DRIP enrollment; never send partner steps to dead leads
      AND p.status NOT IN ('disqualified', 'unsubscribed', 'bounced', 'booked', 'handed_off')
+     -- Per-agent gap: sent_at is written with NOW(), so compare on the DB clock
+     AND NOT EXISTS (
+       SELECT 1 FROM sent_emails se_gap
+       WHERE se_gap.agent_id = pe.agent_id
+         AND se_gap.sent_at > NOW() - INTERVAL ${gapSec} SECOND
+     )
      AND NOT EXISTS (
        SELECT 1 FROM sent_emails se
        WHERE se.prospect_id = pe.prospect_id
@@ -964,7 +978,7 @@ async function processPartnerCadences() {
          AND pss2.step_type IN ('agent_send_cc', 'agent_followup')
      )
      ) ranked
-     WHERE agent_rn <= 3
+     WHERE agent_rn <= 1
      ORDER BY partner_replied_at ASC, current_step DESC, enrolled_at ASC`
   );
 
