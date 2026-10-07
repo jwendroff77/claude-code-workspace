@@ -895,10 +895,17 @@ async function processPartnerCadences() {
 
   // Per-agent pacing: at most 1 send per agent per tick (ticks run every minute),
   // and only when that agent's last email of ANY kind (drip or partner) is at
-  // least 2 minutes old.  Ticks are a minute apart, so the real gap lands at
-  // 2-3 min depending on where the tick falls.  Jonathan set 2-3 min gaps on
-  // 2026-10-07 (was 3-5).  The old 15-75s pre-send sleep is gone: it stretched gaps.
-  const gapSec = 120;
+  // ~2 minutes old.  110s (not 120) so the tick 2 minutes after a send qualifies:
+  // with 120 the send's own few seconds of latency pushed every gap to 3:00.
+  // Jonathan set 2 min gaps on 2026-10-07 (was 3-5).  No pre-send sleep.
+  const gapSec = 110;
+
+  // "Today" in Central time, measured on the DB clock.  The Railway MySQL clock runs
+  // ~5h ahead, so DATE(sent_at) = CURDATE() rolled the day over at ~2pm CT.  Counting
+  // back the real minutes since CT midnight from the DB's NOW() is offset-proof.
+  const ctNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' }));
+  const minsSinceCtMidnight = ctNow.getHours() * 60 + ctNow.getMinutes();
+  const DAILY_CAP = 125; // Jonathan raised from 100 on 2026-10-07
 
   // A cross-agent "minimum gap since the last send from ANYONE" guard used to
   // live here. Removed 2026-09-03: it made Lauren wait on Megan's pace even
@@ -948,13 +955,14 @@ async function processPartnerCadences() {
      JOIN partner_sequences ps ON ps.id = pe.sequence_id
      WHERE pe.status IN ('active', 'waiting_partner')
      AND ps.status = 'active'
-     -- Hard per-agent daily ceiling: no agent sends more than 100 emails/day,
+     -- Hard per-agent daily ceiling: no agent sends more than DAILY_CAP emails/day,
      -- counting drip AND partner-cadence together (both write to sent_emails).
      -- Drip already self-limits via agents.daily_send_limit (40-46), but partner
      -- cadence had no ceiling at all -- an agent's combined total could run
-     -- unbounded. 100 is a hard safety cap, not the per-channel target.
+     -- unbounded. This is a hard safety cap, not the per-channel target.
      AND (SELECT COUNT(*) FROM sent_emails se_cap
-          WHERE se_cap.agent_id = pe.agent_id AND DATE(se_cap.sent_at) = CURDATE()) < 100
+          WHERE se_cap.agent_id = pe.agent_id
+            AND se_cap.sent_at >= NOW() - INTERVAL ${minsSinceCtMidnight} MINUTE) < ${DAILY_CAP}
      -- Dead-status backstop: inbox actions set prospects.status but historically
      -- only cancelled the DRIP enrollment; never send partner steps to dead leads
      AND p.status NOT IN ('disqualified', 'unsubscribed', 'bounced', 'booked', 'handed_off')
@@ -968,7 +976,7 @@ async function processPartnerCadences() {
        SELECT 1 FROM sent_emails se
        WHERE se.prospect_id = pe.prospect_id
          AND se.agent_id = pe.agent_id
-         AND DATE(se.sent_at) = CURDATE()
+         AND se.sent_at >= NOW() - INTERVAL ${minsSinceCtMidnight} MINUTE
      )
      AND NOT EXISTS (
        SELECT 1 FROM partner_sequence_steps pss
