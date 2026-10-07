@@ -43,6 +43,14 @@ function countBusinessDays(startDate, endDate) {
 }
 // ---- End business day helpers ----
 
+// Only NeverBounce's own results count as checked.  Anything else (empty, or a label
+// copied in from a list such as Apollo's "verified") gets a real check before step 1.
+// 2026-10-07: a list loaded with Apollo "verified" skipped the check and bounced 4 of 35.
+const NEVERBOUNCE_RESULTS = ['valid', 'catchall', 'unknown', 'invalid', 'disposable'];
+function needsVerification(emailStatus) {
+  return !NEVERBOUNCE_RESULTS.includes(emailStatus);
+}
+
 // Random delay between min and max milliseconds
 function randomDelay(minMs, maxMs) {
   const ms = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
@@ -287,7 +295,7 @@ async function processAgentQueue(agent) {
     // Pre-send verification (NeverBounce): verify any not-yet-verified address before
     // its FIRST send, across every enroll path. No-op if NEVERBOUNCE_API_KEY is unset
     // (verifyEmail returns 'skipped' -> allowed), so this is safe even before the key is added.
-    if (enrollment.current_step === 1 && !enrollment.email_status) {
+    if (enrollment.current_step === 1 && needsVerification(enrollment.email_status)) {
       try {
         const { verifyAndUpdate } = await import('./emailVerification.js');
         const safe = await verifyAndUpdate(enrollment.prospect_id);
@@ -1046,7 +1054,7 @@ async function processPartnerCadences() {
 
         // Pre-send verification (NeverBounce) before the partner intro goes out CC'ing the partner.
         // No-op if NEVERBOUNCE_API_KEY is unset. Blocks invalid/disposable and cancels the enrollment.
-        if (!enrollment.email_status) {
+        if (needsVerification(enrollment.email_status)) {
           try {
             const { verifyAndUpdate } = await import('./emailVerification.js');
             const safe = await verifyAndUpdate(enrollment.prospect_id);
