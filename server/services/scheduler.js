@@ -1205,6 +1205,41 @@ async function processPartnerCadences() {
         const body = personalizeContent(step.body_html, enrollment);
         const fromEmail = enrollment.agent_smtp_user || enrollment.agent_email;
 
+        // REPLY-STOP (partner): once the prospect side answers, a scripted follow-up must
+        // not go out on top of it.  2026-10-08: Barry at McDonald Wholesale booked a
+        // meeting and two prospects replied "no thanks", and all three were still due a
+        // step-3 follow-up.  Our agents, the partner, bounces and out-of-office replies
+        // don't count.  Pause (not cancel) so a human decides what happens next.
+        if (enrollment.conversation_id) {
+          try {
+            const inThread = await getInboxByConversation({
+              email: fromEmail,
+              conversationId: enrollment.conversation_id,
+            });
+            const partnerEmail = (enrollment.partner_email || '').toLowerCase();
+            const prospectSide = (inThread || []).filter(m => {
+              const from = (m.from?.emailAddress?.address || '').toLowerCase();
+              if (!from) return false;
+              if (/mailer-daemon|postmaster|microsoftexchange|noreply|no-reply/i.test(from)) return false;
+              if (from.endsWith('@1cloudnow.com') || from === partnerEmail) return false;
+              if (/^(automatic reply|auto[- ]?reply|out of (the )?office)/i.test(m.subject || '')) return false;
+              return true;
+            });
+            if (prospectSide.length > 0) {
+              await pool.execute(
+                "UPDATE partner_enrollments SET status = 'paused' WHERE id = ?",
+                [enrollment.id]
+              );
+              console.log(`[ReplyStop] ${enrollment.prospect_email}: reply from ${prospectSide[0].from.emailAddress.address} on this thread - partner cadence PAUSED at step ${enrollment.current_step}`);
+              continue;
+            }
+          } catch (replyErr) {
+            // Fail closed: skipping a tick only delays the follow-up.
+            console.error(`[ReplyStop] partner check failed for ${enrollment.prospect_email}: ${replyErr.message} - skipping this tick`);
+            continue;
+          }
+        }
+
         // Try to reply in the same thread using the last message ID
         if (enrollment.last_message_id) {
           try {
