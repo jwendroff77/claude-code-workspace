@@ -762,9 +762,10 @@ export function startScheduler() {
   });
 
   // Signal Intel — weekly scan + auto-stage, Monday 6am CT (11am UTC).
-  // Runs before the 8am send window so staged leads are ready to review that morning.
-  // Staging only ever writes PAUSED enrollments; releasing them stays manual.
-  cron.schedule('0 11 * * 1', async () => {
+  // OFF unless SIGNAL_INTEL_WEEKLY=on.  The scan enriches leads through Apollo (1 credit
+  // each, up to 60 a run) and Jonathan does not want the platform spending credits on
+  // its own (2026-10-11).  The Scan button on the Signal Intel page still works.
+  if (process.env.SIGNAL_INTEL_WEEKLY === 'on') cron.schedule('0 11 * * 1', async () => {
     try {
       const { runFullScan, autoStageQualifiedLeads } = await import('./signalIntel.js');
       console.log('[Scheduler] Weekly Signal Intel scan starting...');
@@ -791,7 +792,7 @@ export function startScheduler() {
     }
   });
 
-  console.log('[Scheduler] Started — drip(3m), IMAP(5m), bounce(15m), hotAlerts(30m), autoPull(1h), scoring(1h), domainHealth(daily), partnerReplyCheck(5m), signalIntel(weekly Mon)');
+  console.log('[Scheduler] Started — drip(3m), IMAP(5m), bounce(15m), hotAlerts(30m), autoPull(1h), scoring(1h), domainHealth(daily), partnerReplyCheck(5m), signalIntel(weekly Mon: ' + (process.env.SIGNAL_INTEL_WEEKLY === 'on' ? 'ON' : 'OFF') + ')');
   console.log('[Scheduler] Partner cadence SENDING is MANUAL ONLY via /api/partner-cadence/send-next');
 }
 
