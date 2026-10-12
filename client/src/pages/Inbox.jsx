@@ -19,7 +19,7 @@ import AgentAvatar from '../components/shared/AgentAvatar';
 import Button from '../components/shared/Button';
 import { api } from '../api/client';
 
-const agentTabs = ['All', 'Megan', 'Lauren', 'Kate', 'Scott'];
+const baseAgentTabs = ['All', 'Megan', 'Lauren', 'Kate', 'Scott', 'Kayla'];
 
 const sentimentStyles = {
   positive: 'bg-success/10 text-success',
@@ -130,6 +130,13 @@ function LoggedInbox() {
       })
       .catch(() => { setSelectedThread([]); setAiDraft(null); });
   }, [selectedId]);
+
+  // Base tabs plus any agent who has logged replies, so a new SDR (Kayla) gets a tab
+  // without another code change.
+  const agentTabs = [...new Set([
+    ...baseAgentTabs,
+    ...inboxItems.map((item) => item.agentFirstName).filter(Boolean),
+  ])];
 
   const filtered = activeTab === 'All'
     ? inboxItems

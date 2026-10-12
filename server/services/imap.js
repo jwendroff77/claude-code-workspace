@@ -270,10 +270,11 @@ export async function checkBounces(agent) {
     const messages = await client
       .api(`/users/${mailbox}/mailFolders/Inbox/messages`)
       .filter(
-        // isRead eq false: every branch below marks an NDR read once handled, so
-        // this stops the same unparseable NDR from being re-selected and re-alerted
-        // every 15-min tick for 48h (the "[Bounce — needs manual review]" loop).
-        `isRead eq false and receivedDateTime ge ${sinceStr} and (` +
+        // Read/unread is NOT used to track what was handled: once Jonathan could open
+        // the agent mailboxes in Outlook, reading an NDR hid it from this check
+        // (Green Family Stores, 10 Oct 2026).  Handled NDRs are recorded in
+        // bounce_ndrs_processed instead.
+        `receivedDateTime ge ${sinceStr} and (` +
         `contains(from/emailAddress/address, 'mailer-daemon') or ` +
         `contains(from/emailAddress/address, 'postmaster') or ` +
         `contains(subject, 'Undeliverable') or ` +
@@ -287,9 +288,25 @@ export async function checkBounces(agent) {
       .top(50)
       .get();
 
+    await ensureBounceTable();
     for (const msg of messages.value) {
-      // Extract the bounced email address from the NDR body
-      const bouncedEmail = extractBouncedEmail(msg.body?.content || msg.bodyPreview || '', msg.subject || '');
+      const [done] = await pool.execute('SELECT 1 FROM bounce_ndrs_processed WHERE message_id = ?', [msg.id]);
+      if (done.length > 0) continue;
+      const markProcessed = () => pool.execute(
+        'INSERT IGNORE INTO bounce_ndrs_processed (message_id, processed_at) VALUES (?, NOW())', [msg.id]
+      ).catch(() => {});
+
+      // Extract the bounced email address from the NDR body.  When that fails, or names
+      // an address we never emailed (a forward, e.g. sb1fcu.org -> ardentcu.org), match
+      // the NDR back to the prospect by address-in-body or by the original subject.
+      let bouncedEmail = extractBouncedEmail(msg.body?.content || msg.bodyPreview || '', msg.subject || '');
+      const [direct] = bouncedEmail
+        ? await pool.execute('SELECT id FROM prospects WHERE email = ?', [bouncedEmail])
+        : [[]];
+      if (direct.length === 0) {
+        const matched = await matchBounceToProspect(agent.id, msg.body?.content || msg.bodyPreview || '', msg.subject || '');
+        if (matched) bouncedEmail = matched.email.toLowerCase();
+      }
       if (!bouncedEmail) {
         // An NDR we can't auto-parse (e.g. mail-loop/routing errors with no recipient
         // in the body). Don't silently drop it — flag to the owner for manual review,
@@ -308,6 +325,7 @@ export async function checkBounces(agent) {
           } catch (e) { console.error(`[Bounce] unparseable-NDR alert failed:`, e.message); }
         })();
         try { await client.api(`/users/${mailbox}/messages/${msg.id}`).update({ isRead: true }); } catch (e) { /* non-fatal */ }
+        await markProcessed();
         continue;
       }
 
@@ -321,6 +339,7 @@ export async function checkBounces(agent) {
         try {
           await client.api(`/users/${mailbox}/messages/${msg.id}`).update({ isRead: true });
         } catch (e) { /* non-fatal */ }
+        await markProcessed();
         continue;
       }
 
@@ -349,7 +368,7 @@ export async function checkBounces(agent) {
         // Cancel partner enrollments too
         await pool.execute(
           `UPDATE partner_enrollments SET status = 'cancelled'
-           WHERE prospect_id = ? AND status IN ('active', 'waiting_partner')`,
+           WHERE prospect_id = ? AND status IN ('active', 'waiting_partner', 'paused')`,
           [prospect.id]
         );
 
@@ -401,6 +420,7 @@ export async function checkBounces(agent) {
         await client.api(`/users/${mailbox}/messages/${msg.id}`).update({ isRead: true });
       } catch (e) { /* non-fatal */ }
 
+      await markProcessed();
       console.log(`[Bounce] ${agent.name}: ${bouncedEmail} removed (NDR detected)`);
       bounces.push(bouncedEmail);
     }
@@ -409,6 +429,46 @@ export async function checkBounces(agent) {
   }
 
   return bounces;
+}
+
+let bounceTableReady = false;
+async function ensureBounceTable() {
+  if (bounceTableReady) return;
+  await pool.execute(
+    `CREATE TABLE IF NOT EXISTS bounce_ndrs_processed (
+       message_id VARCHAR(255) PRIMARY KEY,
+       processed_at DATETIME NOT NULL
+     )`
+  );
+  bounceTableReady = true;
+}
+
+// Fallback when the NDR body doesn't yield a usable recipient: (1) an address this
+// agent emailed in the last 30 days appears anywhere in the NDR, or (2) the NDR
+// subject repeats the subject we sent ("Undeliverable: Introduction - X ...").
+// Only a single unambiguous match counts.
+async function matchBounceToProspect(agentId, body, subject) {
+  const text = body.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').toLowerCase();
+  const [recent] = await pool.execute(
+    `SELECT DISTINCT p.id, p.email FROM sent_emails se JOIN prospects p ON p.id = se.prospect_id
+     WHERE se.agent_id = ? AND se.sent_at >= NOW() - INTERVAL 30 DAY AND p.email IS NOT NULL`,
+    [agentId]
+  );
+  const byAddress = recent.filter(p => text.includes(p.email.toLowerCase()));
+  if (byAddress.length === 1) return byAddress[0];
+
+  const original = subject
+    .replace(/^\s*(undeliverable|undelivered mail returned to sender|delivery status notification \(failure\)|mail delivery failed|returned mail|delivery has failed)\s*:?\s*/i, '')
+    .trim();
+  if (original.length >= 8 && original !== subject.trim()) {
+    const [bySubject] = await pool.execute(
+      `SELECT DISTINCT p.id, p.email FROM sent_emails se JOIN prospects p ON p.id = se.prospect_id
+       WHERE se.agent_id = ? AND se.subject = ? AND se.sent_at >= NOW() - INTERVAL 30 DAY`,
+      [agentId, original]
+    );
+    if (bySubject.length === 1) return bySubject[0];
+  }
+  return null;
 }
 
 // Extract bounced email address from NDR body content
