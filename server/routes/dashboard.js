@@ -7,7 +7,7 @@ const router = Router();
 router.get('/metrics', async (req, res) => {
   try {
     const [[{ appointments }]] = await pool.query(
-      "SELECT COUNT(*) AS appointments FROM prospects WHERE status = 'appointment_set'"
+      "SELECT COUNT(*) AS appointments FROM prospects WHERE status = 'booked'"
     );
 
     const [[{ emailsToday }]] = await pool.query(

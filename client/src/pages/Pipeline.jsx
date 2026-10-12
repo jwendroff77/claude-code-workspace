@@ -16,7 +16,9 @@ const columns = [
   { key: 'in_sequence', label: 'In Sequence', icon: Mail, accentClass: 'text-txt-tertiary' },
   { key: 'replied', label: 'Replied', icon: Reply, accentClass: 'text-accent' },
   { key: 'engaged', label: 'Engaged', icon: MessageSquare, accentClass: 'text-warning' },
-  { key: 'appointment', label: 'Appointment Booked', icon: CalendarCheck, accentClass: 'text-success' },
+  // 'booked' is the status the platform writes (Inbox Book Appointment, booking detection).
+  // This column used 'appointment', which no prospect ever has, so it was always empty.
+  { key: 'booked', label: 'Appointment Booked', icon: CalendarCheck, accentClass: 'text-success' },
   { key: 'handed_off', label: 'Handed to Jonathan', icon: ArrowRightLeft, accentClass: 'text-accent' },
   { key: 'disqualified', label: 'Disqualified', icon: XCircle, accentClass: 'text-danger' },
 ];
@@ -26,7 +28,7 @@ const emptyPipeline = {
   in_sequence: [],
   replied: [],
   engaged: [],
-  appointment: [],
+  booked: [],
   handed_off: [],
   disqualified: [],
 };
