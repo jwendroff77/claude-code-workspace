@@ -16,6 +16,19 @@ function buildUnsubFooter(prospectId, email) {
     `</div>`;
 }
 
+// Partner-cadence emails (sent straight through Graph, not sendEmail) never had an
+// opt-out.  One small line under the signature; plain inline markup so it survives
+// Graph replyAll, which rewrites <p> tags.  Address is already in the signature.
+export function partnerUnsubUrl(prospectId, email) {
+  if (!prospectId || !email) return '';
+  return `${UNSUB_BASE_URL}/${generateUnsubToken(prospectId, email)}`;
+}
+export function partnerUnsubLine(prospectId, email) {
+  const url = partnerUnsubUrl(prospectId, email);
+  if (!url) return '';
+  return `<br><br><span style="font-size:11px;color:#999999;">Prefer not to hear from us? <a href="${url}" style="color:#999999;">Unsubscribe</a></span>`;
+}
+
 // Send an email as a specific agent via Microsoft Graph API
 export async function sendEmail({ agent, to, cc, subject, html, text, prospectId, stepId }) {
   // Use the agent's smtp_user (M365 login) as the from address for Graph API
