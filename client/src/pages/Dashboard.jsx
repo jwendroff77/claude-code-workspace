@@ -141,7 +141,7 @@ function AgentCard({ agent }) {
           </div>
           <div className="rounded-lg bg-bg-primary px-3 py-2 text-center">
             <p className="font-mono text-lg font-bold text-accent">{agent.appointmentsWeek}</p>
-            <p className="text-[10px] uppercase tracking-wider text-txt-tertiary">Appts/Wk</p>
+            <p className="text-[10px] uppercase tracking-wider text-txt-tertiary">Appts</p>
           </div>
           {isManual ? (
             <div className="rounded-lg bg-bg-primary px-3 py-2 text-center">
@@ -190,7 +190,16 @@ export default function Dashboard() {
         api.getAttentionFeed(),
       ]);
       if (metricsData.status === 'fulfilled') setMetrics(metricsData.value);
-      if (agentsData.status === 'fulfilled') setAgents(agentsData.value);
+      // The API returns snake_case counts; the cards read camelCase.  They never
+      // matched, so every card showed blank numbers.
+      if (agentsData.status === 'fulfilled') setAgents((agentsData.value || []).map((a) => ({
+        ...a,
+        sentToday: Number(a.sent_today) || 0,
+        limit: Number(a.daily_limit) || 0,
+        replyRate: Number(a.sent_7d) > 0 ? Math.round((Number(a.replies_7d) / Number(a.sent_7d)) * 1000) / 10 : 0,
+        appointmentsWeek: Number(a.appointments) || 0,
+        queueSize: Number(a.queue_size) || 0,
+      })));
       if (attentionData.status === 'fulfilled') setAttention((attentionData.value || []).map(mapAttentionItem));
     } finally {
       setLoading(false);

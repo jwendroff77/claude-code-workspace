@@ -19,7 +19,8 @@ router.get('/metrics', async (req, res) => {
     );
 
     const [[{ totalReplies }]] = await pool.query(
-      'SELECT COUNT(*) AS totalReplies FROM received_emails WHERE received_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)'
+      // Prospect replies only: partner reply-alls and bounce notices are logged here too
+      'SELECT COUNT(*) AS totalReplies FROM received_emails WHERE prospect_id IS NOT NULL AND received_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)'
     );
 
     const replyRate = totalSent > 0 ? ((totalReplies / totalSent) * 100).toFixed(1) : 0;
@@ -49,16 +50,33 @@ router.get('/metrics', async (req, res) => {
 // GET /agents - agent performance summary for dashboard cards
 router.get('/agents', async (req, res) => {
   try {
+    // SDR cards only: Comcast partners (role 'manual') and Jonathan ('closer') never send.
+    // "Today" is the Central day measured on the DB clock (Railway MySQL runs ~5h ahead,
+    // so CURDATE() rolled over at ~2pm CT).
+    const ct = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' }));
+    const minsToday = ct.getHours() * 60 + ct.getMinutes();
     const [rows] = await pool.query(
       `SELECT
-        a.id, a.name, a.status,
+        a.id, a.name, a.status, a.role,
         COUNT(DISTINCT e.prospect_id) AS active_prospects,
-        (SELECT COUNT(*) FROM sent_emails se WHERE se.agent_id = a.id AND DATE(se.sent_at) = CURDATE()) AS sent_today,
+        (SELECT COUNT(*) FROM sent_emails se WHERE se.agent_id = a.id AND se.sent_at >= NOW() - INTERVAL ${minsToday} MINUTE) AS sent_today,
         (SELECT COUNT(*) FROM sent_emails se WHERE se.agent_id = a.id AND se.sent_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)) AS sent_7d,
-        (SELECT COUNT(*) FROM received_emails re WHERE re.agent_id = a.id AND re.received_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)) AS replies_7d,
-        (SELECT COUNT(*) FROM received_emails re WHERE re.agent_id = a.id AND re.actioned = 0) AS unactioned_replies
+        (SELECT COUNT(*) FROM received_emails re WHERE re.agent_id = a.id AND re.prospect_id IS NOT NULL AND re.received_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)) AS replies_7d,
+        (SELECT COUNT(*) FROM received_emails re WHERE re.agent_id = a.id AND re.actioned = 0) AS unactioned_replies,
+        -- Partner-cadence SDRs run under the 125/day platform cap, drip-only SDRs under their own limit
+        CASE WHEN EXISTS (SELECT 1 FROM partner_sequences ps WHERE ps.agent_id = a.id AND ps.status = 'active')
+             THEN 125 ELSE a.daily_send_limit END AS daily_limit,
+        -- Waiting to send: active drip enrollments + partner intros queued at step 1
+        (SELECT COUNT(*) FROM enrollments e2 WHERE e2.agent_id = a.id AND e2.status = 'active')
+          + (SELECT COUNT(*) FROM partner_enrollments pe WHERE pe.agent_id = a.id AND pe.status = 'active' AND pe.current_step = 1) AS queue_size,
+        -- Booked appointments sourced by this SDR (drip or partner cadence), all time
+        (SELECT COUNT(DISTINCT p.id) FROM prospects p
+          WHERE p.status = 'booked'
+            AND (EXISTS (SELECT 1 FROM enrollments e3 WHERE e3.prospect_id = p.id AND e3.agent_id = a.id)
+              OR EXISTS (SELECT 1 FROM partner_enrollments pe2 WHERE pe2.prospect_id = p.id AND pe2.agent_id = a.id))) AS appointments
        FROM agents a
        LEFT JOIN enrollments e ON e.agent_id = a.id AND e.status = 'active'
+       WHERE a.role = 'outbound'
        GROUP BY a.id
        ORDER BY a.name`
     );
