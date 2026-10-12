@@ -338,3 +338,38 @@ Return ONLY the JSON array, nothing else.`,
 
   return null;
 }
+
+// Did the sender leave their role, and did they name who replaced them?
+// Used to stage a replacement contact for Jonathan's approval.  Temporary coverage
+// ("contact Jane while I'm out") is NOT a replacement.
+export async function extractReplacement({ text, company, formerName }) {
+  const anthropic = getClient();
+  const message = await anthropic.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 300,
+    messages: [
+      {
+        role: 'user',
+        content: `This is a reply to a sales email sent to ${formerName || 'a contact'} at ${company || 'a company'}.
+
+Decide two things:
+1. departed: true only if the reply says ${formerName || 'the contact'} has permanently retired, left the company, or is no longer in the role.  Out-of-office, vacation, leave, or "contact X while I'm away" is NOT departed.
+2. replacement: the specific PERSON the reply names as taking over or as the right contact now.  Only include an email address that appears in the reply text.  A shared mailbox (info@, accounting@, it@, support@) or a phone number alone is not a person.
+
+Reply text:
+${text}
+
+Return JSON only: {"departed": true|false, "replacement": {"first_name": "", "last_name": "", "title": "", "email": ""} or null, "quote": "the sentence that shows it"}`,
+      },
+    ],
+  });
+
+  try {
+    const raw = message.content[0].text.trim();
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (jsonMatch) return JSON.parse(jsonMatch[0]);
+  } catch (e) {
+    // Parse failed
+  }
+  return null;
+}

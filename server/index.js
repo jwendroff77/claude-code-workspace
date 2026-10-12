@@ -23,6 +23,7 @@ import dashboardRoutes from './routes/dashboard.js';
 import partnerCadenceRoutes from './routes/partnerCadence.js';
 import unsubscribeRoutes from './routes/unsubscribe.js';
 import trackingRoutes from './routes/tracking.js';
+import replacementRoutes from './routes/replacement.js';
 import analyticsRoutes from './routes/analytics.js';
 import abRoutes from './routes/ab.js';
 import taskRoutes from './routes/tasks.js';
@@ -40,6 +41,13 @@ app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 500 }));
 // Auth route — public
 app.use('/api/auth', authRoutes);
 
+// Links that recipients (and Jonathan, from an alert email) click without logging in.
+// They were mounted after requireAuth, so every unsubscribe and tracked link returned
+// 401 to the recipient (found 2026-10-11).  Each verifies its own signed token or id.
+app.use('/api/unsubscribe', unsubscribeRoutes);
+app.use('/api/track', trackingRoutes);
+app.use('/api/replacement', replacementRoutes);
+
 // All other API routes require a valid JWT
 app.use('/api', requireAuth);
 
@@ -53,8 +61,6 @@ app.use('/api/ai', aiRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/partner-cadence', partnerCadenceRoutes);
-app.use('/api/unsubscribe', unsubscribeRoutes);
-app.use('/api/track', trackingRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/ab', abRoutes);
 app.use('/api/tasks', taskRoutes);

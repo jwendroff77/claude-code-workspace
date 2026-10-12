@@ -46,7 +46,7 @@ export async function checkNewEmails(agent) {
     const messages = await client
       .api(`/users/${mailbox}/mailFolders/Inbox/messages`)
       .filter(`receivedDateTime ge ${sinceStr}`)
-      .select('id,subject,from,ccRecipients,toRecipients,bodyPreview,body,receivedDateTime')
+      .select('id,subject,from,ccRecipients,toRecipients,bodyPreview,body,receivedDateTime,conversationId')
       .top(50)
       .orderby('receivedDateTime desc')
       .get();
@@ -76,7 +76,30 @@ export async function checkNewEmails(agent) {
         [fromEmail]
       );
 
-      const prospectId = prospects.length > 0 ? prospects[0].id : null;
+      let prospectId = prospects.length > 0 ? prospects[0].id : null;
+
+      // Replies often come from a different address than the one we emailed
+      // (Jack@TheFair.com vs jackm@thefair.com asked to unsubscribe on 7 Oct and was
+      // never seen).  Fall back to the thread: whoever answers in a prospect's
+      // conversation is that prospect's side, unless it's one of our agents or a partner.
+      if (!prospectId && msg.conversationId) {
+        const [ours] = await pool.execute(
+          'SELECT id FROM agents WHERE LOWER(email) = ? OR LOWER(smtp_user) = ?',
+          [fromEmail.toLowerCase(), fromEmail.toLowerCase()]
+        );
+        if (ours.length === 0 && !/@1cloud(now|communications)\.com$/i.test(fromEmail)) {
+          const [byThread] = await pool.execute(
+            `SELECT prospect_id FROM partner_enrollments WHERE conversation_id = ? AND agent_id = ?
+             UNION SELECT prospect_id FROM prospect_sequence_enrollment WHERE conversation_id = ?
+             LIMIT 1`,
+            [msg.conversationId, agent.id, msg.conversationId]
+          );
+          if (byThread.length > 0) {
+            prospectId = byThread[0].prospect_id;
+            console.log(`[Inbox] ${agent.name}: ${fromEmail} matched to prospect #${prospectId} by thread`);
+          }
+        }
+      }
 
       // Extract plain text from body
       const bodyText = msg.bodyPreview || '';
@@ -144,6 +167,24 @@ export async function checkNewEmails(agent) {
               'UPDATE received_emails SET sentiment = ?, classification_details = ? WHERE id = ?',
               [sentiment, JSON.stringify(classResult), result.insertId]
             );
+
+            // Retired / no longer in role + named a successor: stage them for Jonathan's
+            // one-click approval (never sends on its own).  Uses the full body, not the
+            // 255-char preview, because the successor's email is often further down.
+            if (sentiment !== 'ooo') {
+              try {
+                const { handlePossibleReplacement } = await import('./replacement.js');
+                const fullText = (msg.body?.content || bodyText || '')
+                  .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+                  .replace(/<[^>]*>/g, ' ')
+                  .replace(/&nbsp;/g, ' ')
+                  .replace(/\s+/g, ' ')
+                  .slice(0, 6000);
+                await handlePossibleReplacement({ agent, prospectId, subject: msg.subject || '', text: fullText, senderEmail: fromEmail });
+              } catch (e) {
+                console.error(`[Replacement] check failed for ${fromEmail}: ${e.message}`);
+              }
+            }
 
             // Update A/B variant reply stats
             try {
