@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import pool from '../db/connection.js';
-import { runFullScan } from '../services/signalIntel.js';
+import { runFullScan, revealLeadEmails } from '../services/signalIntel.js';
 
 const router = Router();
 
@@ -105,6 +105,23 @@ router.post('/scan', async (req, res) => {
 });
 
 // PUT /:id/dismiss - dismiss a lead
+// POST /reveal - get emails for the leads Jonathan checked (1 Apollo credit each)
+router.post('/reveal', async (req, res) => {
+  try {
+    const ids = (Array.isArray(req.body?.ids) ? req.body.ids : [])
+      .map(Number).filter(Number.isInteger).slice(0, 100);
+    if (ids.length === 0) return res.status(400).json({ error: 'No leads selected' });
+    const results = await revealLeadEmails(ids);
+    res.json({
+      results,
+      found: results.filter(r => r.status === 'found').length,
+      noEmail: results.filter(r => r.status === 'no_email').length,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.put('/:id/dismiss', async (req, res) => {
   try {
     const [result] = await pool.execute(

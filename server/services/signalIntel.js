@@ -537,7 +537,10 @@ export async function scanNewsSources() {
  * Enrich a company with Apollo — find IT/ops decision makers.
  * Returns enriched contact info or null.
  */
-export async function enrichWithApollo(companyName) {
+// reveal=false (the scan): find the best person with Apollo's free search only.
+// reveal=true spends 1 credit on people/match for the email.  Jonathan picks which
+// leads are worth that from the Signal Intel page (2026-10-11).
+export async function enrichWithApollo(companyName, { reveal = false } = {}) {
   // Apollo API key from .env
   const apiKey = process.env.APOLLO_API_KEY;
   if (!apiKey) return null;
@@ -573,8 +576,8 @@ export async function enrichWithApollo(companyName) {
     // Find first person with email, or best candidate
     let bestPerson = people.find(p => p.email) || people[0];
 
-    // If no email exposed, try to enrich by ID
-    if (!bestPerson.email && bestPerson.id) {
+    // If no email exposed, enrich by ID - only when asked to (costs a credit)
+    if (reveal && !bestPerson.email && bestPerson.id) {
       const enrichRes = await fetch('https://api.apollo.io/v1/people/match', {
         method: 'POST',
         headers: {
@@ -1010,4 +1013,49 @@ export async function autoStageQualifiedLeads({ minScore = AUTO_STAGE_MIN_SCORE,
   }
 
   return { staged, skipped, stagedCount: staged.length, skippedCount: skipped.length, dryRun };
+}
+
+
+// Get emails for the leads Jonathan checked on the Signal Intel page: 1 Apollo
+// credit each (people/match by the Apollo id the free scan saved).  Leads that
+// already have an email, or were already looked up (email_lookup_at), are skipped
+// and cost nothing - a second lookup returns the same empty result.
+export async function revealLeadEmails(ids) {
+  const apiKey = process.env.APOLLO_API_KEY;
+  if (!apiKey) throw new Error('Apollo is not configured');
+  const results = [];
+  for (const id of ids) {
+    const [[lead]] = await pool.execute(
+      'SELECT id, company, contact_email, apollo_id, email_lookup_at FROM signal_intel_leads WHERE id = ?',
+      [id]
+    );
+    if (!lead) { results.push({ id, status: 'not_found' }); continue; }
+    if (lead.contact_email) { results.push({ id, status: 'already_had', email: lead.contact_email }); continue; }
+    if (!lead.apollo_id) { results.push({ id, status: 'no_contact' }); continue; }
+    if (lead.email_lookup_at) { results.push({ id, status: 'already_tried' }); continue; }
+    try {
+      const res = await fetch('https://api.apollo.io/v1/people/match', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+        body: JSON.stringify({ id: lead.apollo_id }),
+      });
+      if (!res.ok) { results.push({ id, status: 'error', error: `Apollo ${res.status}` }); continue; }
+      const p = (await res.json()).person || {};
+      const name = p.name || [p.first_name, p.last_name].filter(Boolean).join(' ');
+      await pool.execute(
+        `UPDATE signal_intel_leads SET
+           contact_email = ?,
+           contact_name = COALESCE(NULLIF(?, ''), contact_name),
+           contact_phone = COALESCE(NULLIF(?, ''), contact_phone),
+           contact_linkedin = COALESCE(NULLIF(?, ''), contact_linkedin),
+           email_lookup_at = NOW()
+         WHERE id = ?`,
+        [p.email || null, name || '', p.phone_numbers?.[0]?.sanitized_number || '', p.linkedin_url || '', lead.id]
+      );
+      results.push({ id, status: p.email ? 'found' : 'no_email', email: p.email || '' });
+    } catch (e) {
+      results.push({ id, status: 'error', error: e.message });
+    }
+  }
+  return results;
 }

@@ -20,6 +20,7 @@ import {
   ArrowRightLeft,
   Users,
   Briefcase,
+  Mail,
 } from 'lucide-react';
 import Button from '../components/shared/Button';
 import { api } from '../api/client';
@@ -100,6 +101,10 @@ export default function SignalIntel() {
   const [minScore, setMinScore] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Leads checked for "Get emails" (1 Apollo credit each)
+  const [checked, setChecked] = useState(() => new Set());
+  const [revealing, setRevealing] = useState(false);
+
   async function loadData() {
     setLoading(true);
     try {
@@ -133,6 +138,36 @@ export default function SignalIntel() {
   }, []);
 
   const selected = leads.find(l => l.id === selectedId);
+
+  // Only new leads with an Apollo contact, no email, and no earlier lookup can be
+  // checked (a repeat lookup costs another credit for the same empty answer)
+  const needsEmail = (l) => l.status === 'new' && !l.contact_email && l.apollo_id && !l.email_lookup_at;
+  const checkable = leads.filter(needsEmail);
+  const checkedIds = [...checked].filter(id => checkable.some(l => l.id === id));
+
+  function toggleChecked(id) {
+    setChecked(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  async function handleReveal(ids) {
+    if (ids.length === 0) return;
+    const n = ids.length;
+    if (!window.confirm(`Get ${n === 1 ? 'the email' : `${n} emails`} from Apollo?  This uses up to ${n} Apollo credit${n === 1 ? '' : 's'}.`)) return;
+    setRevealing(true);
+    try {
+      const r = await api.revealSignalIntelEmails(ids);
+      showFeedback(`Got ${r.found} of ${n} email${n === 1 ? '' : 's'}${r.noEmail ? ` (${r.noEmail} had none on file)` : ''}`);
+      setChecked(new Set());
+      await loadData();
+    } catch (err) {
+      showFeedback(err.message || 'Getting emails failed');
+    }
+    setRevealing(false);
+  }
 
   async function handleScan() {
     setScanning(true);
@@ -300,6 +335,32 @@ export default function SignalIntel() {
         </div>
       )}
 
+      {/* Get-emails bar: check the leads worth contacting, then spend credits on just those */}
+      {!loading && checkable.length > 0 && (
+        <div className="mx-6 mb-3 lg:mx-10 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-bg-secondary px-4 py-2 text-sm">
+          <span className="text-txt-secondary">
+            {checkable.length} lead{checkable.length === 1 ? '' : 's'} without an email
+          </span>
+          <button
+            onClick={() => setChecked(checkedIds.length === checkable.length ? new Set() : new Set(checkable.map(l => l.id)))}
+            className="text-accent hover:underline"
+          >
+            {checkedIds.length === checkable.length ? 'Clear all' : 'Select all'}
+          </button>
+          {checkedIds.length > 0 && (
+            <Button
+              variant="primary"
+              className="ml-auto"
+              disabled={revealing}
+              onClick={() => handleReveal(checkedIds)}
+            >
+              <Mail className="h-4 w-4" />
+              {revealing ? 'Getting emails…' : `Get ${checkedIds.length} email${checkedIds.length === 1 ? '' : 's'} (${checkedIds.length} credit${checkedIds.length === 1 ? '' : 's'})`}
+            </Button>
+          )}
+        </div>
+      )}
+
       {/* Main content: lead list + detail panel */}
       <div className="flex flex-1 min-h-0 px-6 pb-6 lg:px-10 gap-4">
         {/* Lead list */}
@@ -325,6 +386,18 @@ export default function SignalIntel() {
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
+                    {needsEmail(lead) ? (
+                      <input
+                        type="checkbox"
+                        checked={checked.has(lead.id)}
+                        onClick={e => e.stopPropagation()}
+                        onChange={() => toggleChecked(lead.id)}
+                        className="mt-1 h-4 w-4 shrink-0 accent-accent cursor-pointer"
+                        title="Get this lead's email (1 Apollo credit)"
+                      />
+                    ) : (
+                      <span className="w-4 shrink-0" />
+                    )}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
                         <span className="font-semibold text-sm text-txt-primary truncate">{lead.company}</span>
@@ -343,7 +416,7 @@ export default function SignalIntel() {
                       {lead.contact_name && (
                         <p className="text-[11px] text-txt-tertiary">
                           {lead.contact_name}{lead.contact_title ? ` - ${lead.contact_title}` : ''}
-                          {lead.contact_email ? ` - ${lead.contact_email}` : ''}
+                          {lead.contact_email ? ` - ${lead.contact_email}` : (lead.apollo_id ? ' - no email yet' : '')}
                         </p>
                       )}
                     </div>
@@ -469,6 +542,16 @@ export default function SignalIntel() {
                       {selected.contact_email}
                     </a>
                   </p>
+                )}
+                {needsEmail(selected) && (
+                  <Button
+                    variant="secondary"
+                    className="mt-2"
+                    disabled={revealing}
+                    onClick={() => handleReveal([selected.id])}
+                  >
+                    <Mail className="h-4 w-4" /> {revealing ? 'Getting email…' : 'Get email (1 credit)'}
+                  </Button>
                 )}
                 {selected.contact_phone && (
                   <p className="text-xs text-txt-tertiary mt-0.5">{selected.contact_phone}</p>

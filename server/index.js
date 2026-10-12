@@ -94,6 +94,8 @@ async function runSchemaPatches() {
     "ALTER TABLE prospects ADD COLUMN won_mrc DECIMAL(10,2) DEFAULT NULL",
     "ALTER TABLE prospects ADD COLUMN won_term_months INT DEFAULT NULL",
     "ALTER TABLE prospects ADD COLUMN won_notes VARCHAR(255) DEFAULT NULL",
+    // When Apollo was asked for this lead's email (1 credit), so it is never asked twice.
+    "ALTER TABLE signal_intel_leads ADD COLUMN email_lookup_at DATETIME DEFAULT NULL",
   ];
   const { default: pool } = await import('./db/connection.js');
   for (const sql of patches) {

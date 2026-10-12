@@ -129,6 +129,7 @@ export const api = {
   getSignalIntelLeads: (params = {}) => { const q = new URLSearchParams(params).toString(); return request(`/signal-intel?${q}`); },
   getSignalIntelStats: () => request('/signal-intel/stats'),
   triggerSignalIntelScan: (data) => request('/signal-intel/scan', { method: 'POST', body: JSON.stringify(data || {}) }),
+  revealSignalIntelEmails: (ids) => request('/signal-intel/reveal', { method: 'POST', body: JSON.stringify({ ids }) }),
   dismissSignalIntelLead: (id) => request(`/signal-intel/${id}/dismiss`, { method: 'PUT' }),
   enrollSignalIntelLead: (id) => request(`/signal-intel/${id}/enroll`, { method: 'PUT' }),
   enrollSignalIntelPartner: (id, sequenceId) => request(`/signal-intel/${id}/enroll-partner`, { method: 'PUT', body: JSON.stringify({ sequence_id: sequenceId }) }),
