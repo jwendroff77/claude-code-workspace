@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import pool from '../db/connection.js';
-import { sendEmail, getTodaySendCount, partnerUnsubLine, partnerUnsubUrl } from './smtp.js';
+import { sendEmail, getTodaySendCount } from './smtp.js';
 import { sendMail, getInboxByConversation, getLastSentTo, replyToMessage } from './graph.js';
 import { generatePersonalizedOpener } from './ai.js';
 import { getABVariant, recordVariantSend } from '../routes/ab.js';
@@ -1094,7 +1094,6 @@ async function processPartnerCadences() {
         let body = step.body_html || '';
         body = body.replace(/\{\{aiOpener\}\}/g, aiOpener);
         body = personalizeContent(body, enrollment);
-        body += partnerUnsubLine(enrollment.prospect_id, enrollment.prospect_email);
         const subject = personalizeContent(step.subject_line, enrollment);
 
 
@@ -1110,7 +1109,6 @@ async function processPartnerCadences() {
           bcc: bccJonathan,
           subject,
           html: body,
-          unsubscribeUrl: partnerUnsubUrl(enrollment.prospect_id, enrollment.prospect_email),
         });
 
         // Log to sent_emails
@@ -1205,8 +1203,7 @@ async function processPartnerCadences() {
 
       // ---- STEP TYPE: agent_followup (Steps 3-6) ----
       else if (step.step_type === 'agent_followup' && enrollment.status === 'active') {
-        const body = personalizeContent(step.body_html, enrollment)
-          + partnerUnsubLine(enrollment.prospect_id, enrollment.prospect_email);
+        const body = personalizeContent(step.body_html, enrollment);
         const fromEmail = enrollment.agent_smtp_user || enrollment.agent_email;
 
         // REPLY-STOP (partner): once the prospect side answers, a scripted follow-up must
@@ -1257,12 +1254,12 @@ async function processPartnerCadences() {
             // If reply-to-thread fails, send standalone CC'ing partner so they stay in the loop
             console.log(`[PartnerCadence] Thread reply failed (${replyErr.message}), sending standalone CC partner`);
             const subject = `Re: ${personalizeContent(enrollment.sequence_name, enrollment)}`;
-            await sendMail({ fromEmail, to: enrollment.prospect_email, cc: enrollment.partner_email, subject, html: body, unsubscribeUrl: partnerUnsubUrl(enrollment.prospect_id, enrollment.prospect_email) });
+            await sendMail({ fromEmail, to: enrollment.prospect_email, cc: enrollment.partner_email, subject, html: body });
           }
         } else {
           // No thread to reply to - send standalone CC'ing partner
           const subject = `Re: ${personalizeContent(enrollment.sequence_name, enrollment)}`;
-          await sendMail({ fromEmail, to: enrollment.prospect_email, cc: enrollment.partner_email, subject, html: body, unsubscribeUrl: partnerUnsubUrl(enrollment.prospect_id, enrollment.prospect_email) });
+          await sendMail({ fromEmail, to: enrollment.prospect_email, cc: enrollment.partner_email, subject, html: body });
         }
 
         // Log to sent_emails
