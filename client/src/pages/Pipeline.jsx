@@ -7,6 +7,7 @@ import {
   CalendarCheck,
   ArrowRightLeft,
   XCircle,
+  Trophy,
   Clock,
   GripVertical,
 } from 'lucide-react';
@@ -20,6 +21,7 @@ const columns = [
   // This column used 'appointment', which no prospect ever has, so it was always empty.
   { key: 'booked', label: 'Appointment Booked', icon: CalendarCheck, accentClass: 'text-success' },
   { key: 'handed_off', label: 'Handed to Jonathan', icon: ArrowRightLeft, accentClass: 'text-accent' },
+  { key: 'won', label: 'Closed Won', icon: Trophy, accentClass: 'text-success' },
   { key: 'disqualified', label: 'Disqualified', icon: XCircle, accentClass: 'text-danger' },
 ];
 
@@ -30,10 +32,14 @@ const emptyPipeline = {
   engaged: [],
   booked: [],
   handed_off: [],
+  won: [],
   disqualified: [],
 };
 
+const money = (n) => `$${Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+
 function ProspectCard({ prospect }) {
+  const won = prospect.status === 'won';
   const name = [prospect.first_name, prospect.last_name].filter(Boolean).join(' ') || '—';
   const daysInStage = prospect.updated_at
     ? Math.floor((Date.now() - new Date(prospect.updated_at)) / 86400000)
@@ -51,12 +57,31 @@ function ProspectCard({ prospect }) {
         </div>
         <AgentAvatar name={prospect.agent_name} status="active" size="sm" />
       </div>
+      {won && prospect.won_mrc && (
+        <div className="rounded-md bg-success/10 px-2 py-1.5 text-xs">
+          <p className="font-semibold text-success">
+            {money(prospect.won_mrc)}/mo{prospect.won_term_months ? ` · ${prospect.won_term_months} mo` : ''}
+          </p>
+          {prospect.won_term_months && (
+            <p className="text-txt-secondary">{money(prospect.won_mrc * prospect.won_term_months)} contract</p>
+          )}
+          {prospect.agent_name && (
+            <p className="text-txt-tertiary">
+              Sourced by {prospect.agent_name.split(' ')[0]}{prospect.partner_name ? ` + ${prospect.partner_name.split(' ')[0]}` : ''}
+            </p>
+          )}
+        </div>
+      )}
       <div className="flex items-center justify-between text-[10px] text-txt-tertiary">
         <span className="flex items-center gap-1">
           <Clock className="h-3 w-3" />
-          {daysInStage}d in stage
+          {won ? 'Won' : `${daysInStage}d in stage`}
         </span>
-        <span>{lastTouch}</span>
+        <span>
+          {won && prospect.won_at
+            ? new Date(prospect.won_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
+            : lastTouch}
+        </span>
       </div>
     </div>
   );

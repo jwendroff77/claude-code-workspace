@@ -7,10 +7,18 @@ const router = Router();
 router.get('/', async (req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT p.*, e.agent_id, e.sequence_id, a.name AS agent_name
+      // Agent from the drip enrollment, else the latest partner enrollment (partner-
+      // cadence prospects like ITEX showed "?" before), plus the partner for credit.
+      `SELECT p.*, COALESCE(e.agent_id, pe.agent_id) AS agent_id, e.sequence_id,
+              COALESCE(a.name, pa.name) AS agent_name, pp.name AS partner_name
        FROM prospects p
        LEFT JOIN enrollments e ON e.prospect_id = p.id
        LEFT JOIN agents a ON e.agent_id = a.id
+       LEFT JOIN (SELECT prospect_id, MAX(id) AS id FROM partner_enrollments GROUP BY prospect_id) lpe
+         ON lpe.prospect_id = p.id
+       LEFT JOIN partner_enrollments pe ON pe.id = lpe.id
+       LEFT JOIN agents pa ON pa.id = pe.agent_id
+       LEFT JOIN agents pp ON pp.id = pe.partner_agent_id
        ORDER BY p.updated_at DESC`
     );
 

@@ -241,13 +241,18 @@ export default function Dashboard() {
 
       <div className="px-6 py-8 lg:px-10">
         {/* Hero Metric + Secondary Metrics Row */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <MetricCard
             label="Appointments Booked"
             value={totalAppointments}
-            sub="This month across all agents"
+            sub="All time, across all agents"
             accent
             className="sm:col-span-2 lg:col-span-1 ring-1 ring-accent/20"
+          />
+          <MetricCard
+            label="Closed Won"
+            value={`$${Math.round(metrics.wonMrc || 0).toLocaleString()}/mo`}
+            sub={`${metrics.dealsWon || 0} ${metrics.dealsWon === 1 ? 'deal' : 'deals'} · $${Math.round(metrics.wonContract || 0).toLocaleString()} contract`}
           />
           <MetricCard
             label="Emails Sent Today"

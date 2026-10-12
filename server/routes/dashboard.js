@@ -24,6 +24,10 @@ router.get('/metrics', async (req, res) => {
 
     const replyRate = totalSent > 0 ? ((totalReplies / totalSent) * 100).toFixed(1) : 0;
 
+    const [[won]] = await pool.query(
+      "SELECT COUNT(*) AS deals, COALESCE(SUM(won_mrc), 0) AS mrc, COALESCE(SUM(won_mrc * won_term_months), 0) AS contract FROM prospects WHERE status = 'won'"
+    );
+
     const [[{ inSequence }]] = await pool.query(
       "SELECT COUNT(*) AS inSequence FROM enrollments WHERE status = 'active'"
     );
@@ -32,7 +36,10 @@ router.get('/metrics', async (req, res) => {
       appointmentsBooked: appointments,
       emailsSentToday: emailsToday,
       replyRate: parseFloat(replyRate),
-      prospectsInSequence: inSequence
+      prospectsInSequence: inSequence,
+      dealsWon: won.deals,
+      wonMrc: parseFloat(won.mrc),
+      wonContract: parseFloat(won.contract),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

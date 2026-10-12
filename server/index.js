@@ -87,6 +87,13 @@ async function runSchemaPatches() {
     "ALTER TABLE sequence_steps ADD COLUMN cc_partner TINYINT(1) NOT NULL DEFAULT 0",
     // Which ICP vertical a signal-intel lead came from; routes weekly auto-staging to a partner.
     "ALTER TABLE signal_intel_leads ADD COLUMN vertical VARCHAR(40) DEFAULT NULL",
+    // Closed-won deals sourced by the platform (ITEX, 2026-10-11).  'won' blocks all
+    // sends the same way 'disqualified' does.  Re-running the MODIFY is a no-op.
+    "ALTER TABLE prospects MODIFY status ENUM('pending_scrub','in_sequence','replied','engaged','booked','handed_off','disqualified','unsubscribed','scrubbed','bounced','won') NULL DEFAULT 'in_sequence'",
+    "ALTER TABLE prospects ADD COLUMN won_at DATE DEFAULT NULL",
+    "ALTER TABLE prospects ADD COLUMN won_mrc DECIMAL(10,2) DEFAULT NULL",
+    "ALTER TABLE prospects ADD COLUMN won_term_months INT DEFAULT NULL",
+    "ALTER TABLE prospects ADD COLUMN won_notes VARCHAR(255) DEFAULT NULL",
   ];
   const { default: pool } = await import('./db/connection.js');
   for (const sql of patches) {
