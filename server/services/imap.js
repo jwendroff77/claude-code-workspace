@@ -322,7 +322,11 @@ export async function checkBounces(agent) {
         `contains(subject, 'Delivery Status Notification') or ` +
         `contains(subject, 'Mail delivery failed') or ` +
         `contains(subject, 'Returned mail') or ` +
-        `contains(subject, 'delivery has failed')` +
+        `contains(subject, 'delivery has failed') or ` +
+        // Mimecast and newer Exchange NDRs: "Your message couldn't be delivered".
+        // Not plain 'delivered' - that would also match "Delivered:" success receipts.
+        `contains(subject, 'be delivered') or ` +
+        `contains(subject, 'Undelivered')` +
         `)`
       )
       .select('id,subject,from,body,bodyPreview,receivedDateTime')
