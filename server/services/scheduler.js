@@ -249,7 +249,8 @@ async function processAgentQueue(agent) {
          WHERE se.prospect_id = pse.prospect_id AND DATE(se.sent_at) = CURDATE()
        )
        -- Dead-status backstop: never drip to prospects that are out of play
-       AND p.status NOT IN ('disqualified', 'unsubscribed', 'bounced', 'booked', 'handed_off', 'won')
+       -- ('engaged' = a person is handling the conversation, Jonathan 2026-10-15)
+       AND p.status NOT IN ('disqualified', 'unsubscribed', 'bounced', 'booked', 'handed_off', 'won', 'engaged')
        -- DUAL-TRACK GUARD: a prospect live in a partner cadence must never also
        -- receive drip sends (caused duplicate intros, e.g. Peabody 2026-07-08)
        AND NOT EXISTS (
@@ -966,7 +967,7 @@ async function processPartnerCadences() {
             AND se_cap.sent_at >= NOW() - INTERVAL ${minsSinceCtMidnight} MINUTE) < ${DAILY_CAP}
      -- Dead-status backstop: inbox actions set prospects.status but historically
      -- only cancelled the DRIP enrollment; never send partner steps to dead leads
-     AND p.status NOT IN ('disqualified', 'unsubscribed', 'bounced', 'booked', 'handed_off', 'won')
+     AND p.status NOT IN ('disqualified', 'unsubscribed', 'bounced', 'booked', 'handed_off', 'won', 'engaged')
      -- Per-agent gap: sent_at is written with NOW(), so compare on the DB clock
      AND NOT EXISTS (
        SELECT 1 FROM sent_emails se_gap
