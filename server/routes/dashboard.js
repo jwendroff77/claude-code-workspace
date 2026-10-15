@@ -6,8 +6,9 @@ const router = Router();
 // GET /metrics - aggregate metrics
 router.get('/metrics', async (req, res) => {
   try {
+    // A closed deal started as a booked meeting, so 'won' still counts as an appointment
     const [[{ appointments }]] = await pool.query(
-      "SELECT COUNT(*) AS appointments FROM prospects WHERE status = 'booked'"
+      "SELECT COUNT(*) AS appointments FROM prospects WHERE status IN ('booked','won')"
     );
 
     const [[{ emailsToday }]] = await pool.query(
@@ -69,9 +70,9 @@ router.get('/agents', async (req, res) => {
         -- Waiting to send: active drip enrollments + partner intros queued at step 1
         (SELECT COUNT(*) FROM enrollments e2 WHERE e2.agent_id = a.id AND e2.status = 'active')
           + (SELECT COUNT(*) FROM partner_enrollments pe WHERE pe.agent_id = a.id AND pe.status = 'active' AND pe.current_step = 1) AS queue_size,
-        -- Booked appointments sourced by this SDR (drip or partner cadence), all time
+        -- Booked appointments sourced by this SDR (drip or partner cadence), all time; won deals were booked first
         (SELECT COUNT(DISTINCT p.id) FROM prospects p
-          WHERE p.status = 'booked'
+          WHERE p.status IN ('booked','won')
             AND (EXISTS (SELECT 1 FROM enrollments e3 WHERE e3.prospect_id = p.id AND e3.agent_id = a.id)
               OR EXISTS (SELECT 1 FROM partner_enrollments pe2 WHERE pe2.prospect_id = p.id AND pe2.agent_id = a.id))) AS appointments
        FROM agents a
