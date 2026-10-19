@@ -7,41 +7,7 @@ import { getABVariant, recordVariantSend } from '../routes/ab.js';
 import { createLinkedInTask } from '../routes/tasks.js';
 import { recalculateAllScores } from './scoring.js';
 import { checkDomainHealth } from './domain.js';
-
-// ---- Business day helpers ----
-// Holidays excluded from business day counts (fixed dates + computed floating holidays)
-function getHolidays(year) {
-  const h = new Set();
-  h.add(`${year}-01-01`); // New Year's Day
-  h.add(`${year}-07-04`); // July 4th
-  h.add(`${year}-12-25`); // Christmas
-  // Memorial Day: last Monday of May
-  const may = new Date(year, 5, 0); // last day of May
-  may.setDate(may.getDate() - ((may.getDay() + 6) % 7));
-  h.add(may.toISOString().slice(0, 10));
-  // Labor Day: first Monday of September
-  const sep = new Date(year, 8, 1);
-  sep.setDate(sep.getDate() + ((8 - sep.getDay()) % 7 || 7));
-  h.add(sep.toISOString().slice(0, 10));
-  return h;
-}
-
-function countBusinessDays(startDate, endDate) {
-  const cur = new Date(startDate);
-  const end = new Date(endDate);
-  cur.setHours(0, 0, 0, 0);
-  end.setHours(0, 0, 0, 0);
-  cur.setDate(cur.getDate() + 1); // start counting day after startDate
-  let count = 0;
-  while (cur <= end) {
-    const dow = cur.getDay();
-    const ds = cur.toISOString().slice(0, 10);
-    if (dow !== 0 && dow !== 6 && !getHolidays(cur.getFullYear()).has(ds)) count++;
-    cur.setDate(cur.getDate() + 1);
-  }
-  return count;
-}
-// ---- End business day helpers ----
+import { countBusinessDays, pickFirstDuePerAgent } from './partnerCadenceDue.js';
 
 // Only NeverBounce's own results count as checked.  Anything else (empty, or a label
 // copied in from a list such as Apollo's "verified") gets a real check before step 1.
@@ -936,7 +902,14 @@ async function processPartnerCadences() {
   // minutes straight while 92 due Ed follow-ups sat untouched. Partitioning by
   // agent_id gives each agent their own top-3, so agents run in parallel
   // instead of competing for one shared queue.
-  const [enrollments] = await pool.query(
+  //
+  // Now 1 send per agent per tick, and it is the first DUE row, not the top row.
+  // 2026-10-19: keeping only agent_rn <= 1 meant one not-yet-due thread (Megan's
+  // seq 5 step 4, 15 business days) blocked 54 due law/accounting step 4s.  SQL
+  // drops follow-ups that can't be due yet (business days <= calendar days, one
+  // day of slack for clock skew, so delay 999 holds never come back); the exact
+  // holiday-aware check is pickFirstDuePerAgent in partnerCadenceDue.js.
+  const [candidates] = await pool.query(
     `SELECT * FROM (
        SELECT pe.*, p.email AS prospect_email, p.first_name, p.last_name, p.company,
               p.industry, p.city, p.state, p.title AS prospect_title,
@@ -946,6 +919,7 @@ async function processPartnerCadences() {
               a.persona_voice AS agent_persona,
               pa.name AS partner_name, pa.email AS partner_email,
               ps.name AS sequence_name,
+              pss_cur.step_type AS cur_step_type, pss_cur.delay_days AS cur_delay_days,
               ROW_NUMBER() OVER (
                 PARTITION BY pe.agent_id
                 ORDER BY pe.partner_replied_at ASC, pe.current_step DESC, pe.enrolled_at ASC
@@ -955,8 +929,17 @@ async function processPartnerCadences() {
      JOIN agents a ON a.id = pe.agent_id
      JOIN agents pa ON pa.id = pe.partner_agent_id
      JOIN partner_sequences ps ON ps.id = pe.sequence_id
+     -- Only pick enrollments at a SENDABLE step. partner_reply (step 2) just waits
+     -- for the partner and is handled by checkPartnerReplies; including it here let
+     -- step-2 enrollments starve step-1 sends every tick (LIMIT 1).
+     JOIN partner_sequence_steps pss_cur ON pss_cur.sequence_id = pe.sequence_id
+                                        AND pss_cur.step_number = pe.current_step
+                                        AND pss_cur.step_type IN ('agent_send_cc', 'agent_followup')
      WHERE pe.status IN ('active', 'waiting_partner')
      AND ps.status = 'active'
+     -- Follow-ups can't be due before delay_days calendar days have passed
+     AND (pss_cur.step_type <> 'agent_followup'
+          OR DATEDIFF(NOW(), pe.partner_replied_at) + 1 >= pss_cur.delay_days)
      -- Hard per-agent daily ceiling: no agent sends more than DAILY_CAP emails/day,
      -- counting drip AND partner-cadence together (both write to sent_emails).
      -- Drip already self-limits via agents.daily_send_limit (40-46), but partner
@@ -980,26 +963,12 @@ async function processPartnerCadences() {
          AND se.agent_id = pe.agent_id
          AND se.sent_at >= NOW() - INTERVAL ${minsSinceCtMidnight} MINUTE
      )
-     AND NOT EXISTS (
-       SELECT 1 FROM partner_sequence_steps pss
-       WHERE pss.sequence_id = pe.sequence_id
-         AND pss.step_number = pe.current_step
-         AND pss.step_type = 'agent_followup'
-         AND pe.partner_replied_at IS NULL
-     )
-     -- Only pick enrollments at a SENDABLE step. partner_reply (step 2) just waits
-     -- for the partner and is handled by checkPartnerReplies; including it here let
-     -- step-2 enrollments starve step-1 sends every tick (LIMIT 1).
-     AND EXISTS (
-       SELECT 1 FROM partner_sequence_steps pss2
-       WHERE pss2.sequence_id = pe.sequence_id
-         AND pss2.step_number = pe.current_step
-         AND pss2.step_type IN ('agent_send_cc', 'agent_followup')
-     )
+     AND NOT (pss_cur.step_type = 'agent_followup' AND pe.partner_replied_at IS NULL)
      ) ranked
-     WHERE agent_rn <= 1
-     ORDER BY partner_replied_at ASC, current_step DESC, enrolled_at ASC`
+     WHERE agent_rn <= 200
+     ORDER BY partner_replied_at ASC, current_step DESC, enrolled_at ASC, agent_rn ASC`
   );
+  const enrollments = pickFirstDuePerAgent(candidates);
 
   for (const enrollment of enrollments) {
     try {
