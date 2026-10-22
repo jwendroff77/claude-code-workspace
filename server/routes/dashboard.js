@@ -27,7 +27,7 @@ router.get('/metrics', async (req, res) => {
     const replyRate = totalSent > 0 ? ((totalReplies / totalSent) * 100).toFixed(1) : 0;
 
     const [[won]] = await pool.query(
-      "SELECT COUNT(*) AS deals, COALESCE(SUM(won_mrc), 0) AS mrc, COALESCE(SUM(won_mrc * won_term_months), 0) AS contract FROM prospects WHERE status = 'won'"
+      "SELECT COALESCE(SUM(COALESCE(won_deals, 1)), 0) AS deals, COALESCE(SUM(won_mrc), 0) AS mrc, COALESCE(SUM(won_mrc * won_term_months), 0) AS contract FROM prospects WHERE status = 'won'"
     );
 
     const [[{ inSequence }]] = await pool.query(
@@ -39,7 +39,7 @@ router.get('/metrics', async (req, res) => {
       emailsSentToday: emailsToday,
       replyRate: parseFloat(replyRate),
       prospectsInSequence: inSequence,
-      dealsWon: won.deals,
+      dealsWon: Number(won.deals),
       wonMrc: parseFloat(won.mrc),
       wonContract: parseFloat(won.contract),
     });

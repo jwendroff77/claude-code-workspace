@@ -94,6 +94,9 @@ async function runSchemaPatches() {
     "ALTER TABLE prospects ADD COLUMN won_mrc DECIMAL(10,2) DEFAULT NULL",
     "ALTER TABLE prospects ADD COLUMN won_term_months INT DEFAULT NULL",
     "ALTER TABLE prospects ADD COLUMN won_notes VARCHAR(255) DEFAULT NULL",
+    // Signed contracts on one won customer (McDonald Wholesale = 2: DIA + Starlink backup).
+    // NULL counts as 1 on the dashboard.
+    "ALTER TABLE prospects ADD COLUMN won_deals INT DEFAULT NULL",
     // When Apollo was asked for this lead's email (1 credit), so it is never asked twice.
     "ALTER TABLE signal_intel_leads ADD COLUMN email_lookup_at DATETIME DEFAULT NULL",
   ];
