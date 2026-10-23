@@ -601,6 +601,19 @@ export function startScheduler() {
     }
   });
 
+  // Daniel (Operations Manager) works emails Jonathan forwards him — every 2 minutes.
+  // Does nothing unless DANIEL_INBOX_ENABLED=true.
+  cron.schedule('*/2 * * * *', async () => {
+    if (process.env.DANIEL_INBOX_ENABLED !== 'true') return;
+    try {
+      const { checkDanielInbox } = await import('./daniel.js');
+      const n = await checkDanielInbox();
+      if (n > 0) console.log(`[Daniel] Worked ${n} email(s)`);
+    } catch (err) {
+      console.error('[Scheduler] Daniel inbox error:', err.message);
+    }
+  });
+
   // IMAP poll — every 5 minutes
   cron.schedule('*/5 * * * *', async () => {
     try {

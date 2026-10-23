@@ -1,0 +1,67 @@
+// Run: node --test server/tests/daniel.test.js   (no network, no database)
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { isBoss, isTrustedSender, splitForward, isApproval, parsePlan, renderPlanHtml, htmlToText } from '../services/daniel.js';
+
+const msgFrom = (addr, headers = []) => ({ from: { emailAddress: { address: addr } }, internetMessageHeaders: headers });
+
+test('only Jonathan is the boss', () => {
+  assert.equal(isBoss('Jonathan@1cloudcommunications.com'), true);
+  assert.equal(isBoss('jonathan@1cloudnow.com'), true);
+  assert.equal(isBoss('steven_filek@comcast.com'), false);
+  assert.equal(isBoss(''), false);
+});
+
+test('a spoofed From: Jonathan is not trusted', () => {
+  assert.equal(isTrustedSender(msgFrom('jonathan@1cloudcommunications.com', [])), false);
+  assert.equal(isTrustedSender(msgFrom('jonathan@1cloudcommunications.com', [{ name: 'Authentication-Results', value: 'spf=fail; dmarc=fail' }])), false);
+});
+
+test('internal or DMARC-pass mail from Jonathan is trusted', () => {
+  assert.equal(isTrustedSender(msgFrom('jonathan@1cloudcommunications.com', [{ name: 'X-MS-Exchange-Organization-AuthAs', value: 'Internal' }])), true);
+  assert.equal(isTrustedSender(msgFrom('jonathan@1cloudnow.com', [{ name: 'Authentication-Results', value: 'spf=pass; dkim=pass; dmarc=pass action=none' }])), true);
+  assert.equal(isTrustedSender(msgFrom('someone@else.com', [{ name: 'X-MS-Exchange-Organization-AuthAs', value: 'Internal' }])), false);
+});
+
+test('splits his note from the forwarded email', () => {
+  const t = 'Get Jenna on this please\n\n________________________________\nFrom: ACC Business <billing@acc.com>\nSent: Monday\nYour invoice is attached.';
+  const r = splitForward(t);
+  assert.equal(r.note, 'Get Jenna on this please');
+  assert.match(r.forwarded, /Your invoice is attached/);
+  assert.deepEqual(splitForward('Just a note, nothing forwarded'), { note: 'Just a note, nothing forwarded', forwarded: '' });
+  assert.equal(splitForward('---------- Forwarded message ---------\nFrom: x').note, '');
+});
+
+test('approval replies', () => {
+  for (const y of ['Yes', 'yes, send it', 'Send it', 'OK', 'Approved.', 'looks good']) assert.equal(isApproval(y), true, y);
+  for (const n of ['Yes but change the date', 'No', 'wait', 'Change the subject', 'ok hold off', '']) assert.equal(isApproval(n), false, n);
+});
+
+test('plan parsing keeps only safe, valid parts', () => {
+  const p = parsePlan('Here you go {"summary":"ACC double billed Big Green Egg.","owner":"jenna","steps":[{"who":"jenna","what":"Open a dispute","due":"2026-10-27"},{"who":"nobody","what":"x","due":"soon"}],"draft":{"from":"jenna","to":["billing@acc.com","not an email"],"cc":[],"subject":"Big Green Egg ACC Bills","body":"Hello,\\nHere is what we need."},"questions":["Which month?"],"flags":[]}');
+  assert.equal(p.owner, 'jenna');
+  assert.equal(p.steps.length, 2);
+  assert.equal(p.steps[1].who, 'jenna');      // unknown person falls back to the owner
+  assert.equal(p.steps[1].due, null);         // bad date dropped
+  assert.deepEqual(p.draft.to, ['billing@acc.com']);
+  assert.equal(parsePlan('no json here'), null);
+});
+
+test('a draft from someone who cannot send is dropped', () => {
+  const p = parsePlan('{"summary":"x","owner":"kayla","steps":[],"draft":{"from":"kayla","to":["a@b.com"],"subject":"s","body":"b"}}');
+  assert.equal(p.draft, null);
+});
+
+test('plan email: no em dashes, says sending is off while testing', () => {
+  const p = parsePlan('{"summary":"Lisa at ITEX needs a check-in.","owner":"daniel","steps":[{"who":"daniel","what":"Draft the check-in","due":"2026-10-26"}],"draft":{"from":"daniel","to":["lisa@itex.com"],"subject":"Port Arthur sites","body":"Hi Lisa,\\nHow did it go?"}}');
+  const html = renderPlanHtml(p, { sendingOn: false });
+  assert.match(html, /^Got it\./);
+  assert.match(html, /switched off while we test/);
+  assert.match(html, /Mon, Oct 26/);
+  assert.ok(!html.includes('—'));
+  assert.match(renderPlanHtml(p, { sendingOn: true }), /Reply <b>yes<\/b>/);
+});
+
+test('html to text', () => {
+  assert.equal(htmlToText('<p>Hi&nbsp;there</p><p>Line 2</p>'), 'Hi there\nLine 2');
+});
