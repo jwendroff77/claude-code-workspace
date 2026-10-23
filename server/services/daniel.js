@@ -97,6 +97,11 @@ export function isApproval(note) {
 // House style: no em or en dashes anywhere.
 export const noDashes = v => String(v).replace(/\s*[—–]\s*/g, ', ').replace(/\s+--+\s+/g, ', ');
 
+export function isDone(note) {
+  const first = String(note || '').trim().split('\n')[0].trim().toLowerCase();
+  return /^(done|all set|all done|handled|resolved|taken care of|completed?|finished|close (it|this) out)\b/.test(first);
+}
+
 export function parsePlan(raw) {
   const m = String(raw || '').match(/\{[\s\S]*\}/);
   if (!m) return null;
@@ -173,6 +178,7 @@ Jonathan forwards you emails or writes to you.  Work it like a sharp, forward-th
 - If an email should go outside the company, write the draft from the right person (jenna for carrier install/billing issues, hannah for commissions and TSD statements, daniel for anything else).  Drafts are only sent after Jonathan says yes.
 - Draft style: direct but human.  Warm one-line opener, then "Here's what we need:" if there is an ask, then thanks.  Team mailboxes (support@, billing@) get "Hello,".  Short.  No em dashes.  Two spaces after each sentence.  Prices always include the 5-IP /29 block as one total.
 - Things the sender clearly asked for (stop emailing me, check back in Q1) are just done, not questions.  Ask Jonathan only real judgment calls, and keep it to what you truly need.
+- Reminders: when Jonathan asks to be reminded, add a step for jonathan with that due date.  Every open step shows up in his 8:00am list on its due date and stays there until he replies "done".  Say "It will be on your 8:00am list Monday" (with the real day), never promise anything else.
 - Never draft an email to Jonathan or to the team.  Anything you need from Jonathan goes in questions.
 - Never invent facts, account numbers, prices or dates that are not in the email.  If something is missing, say so in questions.
 
@@ -299,6 +305,13 @@ async function handleMessage(msg) {
     : [[]];
   const previous = prior[0] ? JSON.parse(prior[0].plan_json) : null;
 
+  if (previous && isDone(note)) {
+    await pool.execute(`UPDATE daniel_requests SET status='done' WHERE conversation_id=?`, [msg.conversationId]);
+    await replyToJonathan(msg.id, 'Marked done.  It is off your list.<br><br>Daniel');
+    await update(msg, { note, status: 'done' });
+    return;
+  }
+
   if (previous?.draft && isApproval(note)) {
     if (!SEND_ON()) {
       await replyToJonathan(msg.id, 'Thanks.  Sending is still switched off while we test, so nothing went out.  You can copy the draft from my last email.<br><br>Daniel');
@@ -345,4 +358,55 @@ export async function checkDanielInbox() {
     }
   }
   return handled;
+}
+
+// ---------- 8:00am list: everything due today or overdue ----------
+
+const OPEN = ['planned', 'awaiting_approval', 'approved_send_off', 'sent'];
+
+export function todayISO(now = new Date()) {
+  return now.toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });   // YYYY-MM-DD
+}
+
+// rows: daniel_requests rows with plan_json.  Uses the newest plan per thread and skips threads marked done.
+export function dueItems(rows, today) {
+  const done = new Set(rows.filter(r => r.status === 'done').map(r => r.conversation_id));
+  const latest = new Map();
+  for (const r of rows) {
+    if (!r.plan_json || done.has(r.conversation_id)) continue;
+    const key = r.conversation_id || r.message_id;
+    if (!latest.has(key) || latest.get(key).id < r.id) latest.set(key, r);
+  }
+  const items = [];
+  for (const r of latest.values()) {
+    if (!OPEN.includes(r.status)) continue;
+    let plan; try { plan = JSON.parse(r.plan_json); } catch { continue; }
+    for (const st of plan.steps || []) {
+      if (st.due && st.due <= today) items.push({ subject: r.subject || '(no subject)', who: st.who, what: st.what, due: st.due, overdue: st.due < today });
+    }
+  }
+  return items.sort((a, b) => a.due.localeCompare(b.due));
+}
+
+export function renderDueList(items) {
+  const line = i => `- ${i.overdue ? '<b>Overdue</b> (was due' + fmtDue(i.due).replace(' (by', '').replace(')', '') + '):  ' : ''}${esc(nameOf(i.who))}: ${esc(i.what)}  <span style="color:#64748b">(${esc(i.subject)})</span>`;
+  return `Good morning Jonathan,<br><br>Here is what is due today${items.some(i => i.overdue) ? ', plus anything overdue' : ''}:<br><br>`
+    + items.map(line).join('<br>')
+    + '<br><br>Reply "done" on my original email for any item that is finished and it comes off the list.<br><br>Daniel';
+}
+
+export async function sendDueList(now = new Date()) {
+  if (!ON()) return 0;
+  await ensureTable();
+  const today = todayISO(now);
+  await pool.execute(`CREATE TABLE IF NOT EXISTS daniel_digests (digest_date DATE PRIMARY KEY, sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
+  const [rows] = await pool.execute(`SELECT id, message_id, conversation_id, subject, status, plan_json FROM daniel_requests WHERE plan_json IS NOT NULL OR status='done'`);
+  const items = dueItems(rows, today);
+  if (!items.length) return 0;
+  const [claimed] = await pool.execute(`INSERT IGNORE INTO daniel_digests (digest_date) VALUES (?)`, [today]);
+  if (claimed.affectedRows !== 1) return 0;   // already sent today
+  const weekday = new Date(today + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'UTC' });
+  await sendMail({ fromEmail: DANIEL_MAILBOX, to: OWNER_EMAIL, subject: `Your list for ${weekday}`, html: renderDueList(items) });
+  console.log(`[Daniel] Sent 8am list with ${items.length} item(s)`);
+  return items.length;
 }

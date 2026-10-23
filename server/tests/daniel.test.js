@@ -1,7 +1,7 @@
 // Run: node --test server/tests/daniel.test.js   (no network, no database)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isBoss, isTrustedSender, splitForward, isApproval, parsePlan, renderPlanHtml, htmlToText, isProtected, pickAttachments } from '../services/daniel.js';
+import { isBoss, isTrustedSender, splitForward, isApproval, parsePlan, renderPlanHtml, htmlToText, isProtected, pickAttachments, isDone, dueItems, renderDueList, todayISO } from '../services/daniel.js';
 
 const msgFrom = (addr, headers = []) => ({ from: { emailAddress: { address: addr } }, internetMessageHeaders: headers });
 
@@ -101,4 +101,31 @@ test('reads attached screenshots and PDFs, skips logos and odd files', () => {
 test('double-hyphen dashes are cleaned too', () => {
   const p = parsePlan('{"summary":"Need a named owner -- not just care agents.","owner":"jenna","steps":[]}');
   assert.equal(p.summary, 'Need a named owner, not just care agents.');
+});
+
+test('"done" replies', () => {
+  for (const y of ['Done', 'done, thanks', 'All set', 'Resolved.', 'taken care of']) assert.equal(isDone(y), true, y);
+  for (const n of ['not done yet', 'Yes', 'Is this done?', '']) assert.equal(isDone(n), false, n);
+});
+
+test('8am list: due today and overdue, newest plan per thread, done threads dropped', () => {
+  const plan = steps => JSON.stringify({ summary: 's', owner: 'daniel', steps });
+  const rows = [
+    { id: 1, conversation_id: 'A', subject: 'ITEX', status: 'planned', plan_json: plan([{ who: 'jonathan', what: 'Old plan step', due: '2026-10-26' }]) },
+    { id: 2, conversation_id: 'A', subject: 'ITEX', status: 'planned', plan_json: plan([{ who: 'jonathan', what: 'Call Lisa', due: '2026-10-26' }, { who: 'daniel', what: 'Later thing', due: '2026-11-02' }]) },
+    { id: 3, conversation_id: 'B', subject: 'Big Green Egg', status: 'awaiting_approval', plan_json: plan([{ who: 'jenna', what: 'Chase ACC', due: '2026-10-23' }]) },
+    { id: 4, conversation_id: 'C', subject: 'Finished', status: 'planned', plan_json: plan([{ who: 'jonathan', what: 'Should not show', due: '2026-10-20' }]) },
+    { id: 5, conversation_id: 'C', subject: 'Finished', status: 'done', plan_json: null },
+    { id: 6, conversation_id: 'D', subject: 'No date', status: 'planned', plan_json: plan([{ who: 'daniel', what: 'Someday', due: null }]) },
+  ];
+  const items = dueItems(rows, '2026-10-26');
+  assert.deepEqual(items.map(i => i.what), ['Chase ACC', 'Call Lisa']);
+  assert.equal(items[0].overdue, true);
+  const html = renderDueList(items);
+  assert.match(html, /Overdue<\/b> \(was due Fri, Oct 23\)/);
+  assert.ok(!/[—–]/.test(html));
+});
+
+test('today is computed in Central time', () => {
+  assert.equal(todayISO(new Date('2026-10-27T03:30:00Z')), '2026-10-26');   // 10:30pm Monday in Minnesota
 });

@@ -614,6 +614,17 @@ export function startScheduler() {
     }
   });
 
+  // Daniel's 8:00am list (Central time, weekdays): reminders and steps due today or overdue.
+  cron.schedule('0 8 * * 1-5', async () => {
+    if (process.env.DANIEL_INBOX_ENABLED !== 'true') return;
+    try {
+      const { sendDueList } = await import('./daniel.js');
+      await sendDueList();
+    } catch (err) {
+      console.error('[Scheduler] Daniel 8am list error:', err.message);
+    }
+  }, { timezone: 'America/Chicago' });
+
   // IMAP poll — every 5 minutes
   cron.schedule('*/5 * * * *', async () => {
     try {
