@@ -28,6 +28,7 @@ import analyticsRoutes from './routes/analytics.js';
 import abRoutes from './routes/ab.js';
 import taskRoutes from './routes/tasks.js';
 import signalIntelRoutes from './routes/signalIntel.js';
+import teamsRoutes from './routes/teams.js';
 import { startScheduler } from './services/scheduler.js';
 
 const app = express();
@@ -47,6 +48,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/unsubscribe', unsubscribeRoutes);
 app.use('/api/track', trackingRoutes);
 app.use('/api/replacement', replacementRoutes);
+// Daniel in Microsoft Teams.  Verifies Microsoft's signed token on every request itself.
+app.use('/api/teams', teamsRoutes);
 
 // All other API routes require a valid JWT
 app.use('/api', requireAuth);
