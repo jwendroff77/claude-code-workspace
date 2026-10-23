@@ -1,7 +1,7 @@
 // Run: node --test server/tests/daniel.test.js   (no network, no database)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isBoss, isTrustedSender, splitForward, isApproval, parsePlan, renderPlanHtml, htmlToText } from '../services/daniel.js';
+import { isBoss, isTrustedSender, splitForward, isApproval, parsePlan, renderPlanHtml, htmlToText, isProtected, pickAttachments } from '../services/daniel.js';
 
 const msgFrom = (addr, headers = []) => ({ from: { emailAddress: { address: addr } }, internetMessageHeaders: headers });
 
@@ -62,6 +62,37 @@ test('plan email: no em dashes, says sending is off while testing', () => {
   assert.match(renderPlanHtml(p, { sendingOn: true }), /Reply <b>yes<\/b>/);
 });
 
+test('no em or en dashes survive in anything Daniel writes', () => {
+  const p = parsePlan('{"summary":"The body did not come through — only the wrapper.","owner":"daniel","steps":[{"who":"daniel","what":"Ask – nicely","due":null}]}');
+  assert.ok(!/[—–]/.test(JSON.stringify(p)));
+  assert.equal(p.summary, 'The body did not come through, only the wrapper.');
+});
+
+test('never drafts an email to Jonathan or the team', () => {
+  const p = parsePlan('{"summary":"x","owner":"daniel","steps":[],"draft":{"from":"daniel","to":["jonathan@1cloudcommunications.com"],"subject":"s","body":"b"}}');
+  assert.equal(p.draft, null);
+  const q = parsePlan('{"summary":"x","owner":"jenna","steps":[],"draft":{"from":"jenna","to":["holson@1cloudcommunications.com","billing@acc.com"],"subject":"s","body":"b"}}');
+  assert.deepEqual(q.draft.to, ['holson@1cloudcommunications.com', 'billing@acc.com']);
+});
+
+test('spots encrypted (protected) mail', () => {
+  assert.equal(isProtected({ internetMessageHeaders: [{ name: 'Content-Class', value: 'rpmsg.message' }] }), true);
+  assert.equal(isProtected({ bodyPreview: 'Jonathan Wendroff (jonathan@1cloudcommunications.com) has sent you a protected message.' }), true);
+  assert.equal(isProtected({ bodyPreview: 'Hi Daniel', internetMessageHeaders: [] }), false);
+});
+
 test('html to text', () => {
   assert.equal(htmlToText('<p>Hi&nbsp;there</p><p>Line 2</p>'), 'Hi there\nLine 2');
+});
+
+test('reads attached screenshots and PDFs, skips logos and odd files', () => {
+  const att = (o) => ({ '@odata.type': '#microsoft.graph.fileAttachment', isInline: false, size: 1000, contentBytes: 'AAAA', ...o });
+  const out = pickAttachments([
+    att({ contentType: 'application/pdf', name: 'bill.pdf' }),
+    att({ contentType: 'image/png', name: 'shot.png' }),
+    att({ contentType: 'image/png', name: 'logo.png', isInline: true }),
+    att({ contentType: 'application/x-microsoft-rpmsg-message', name: 'message.rpmsg' }),
+    att({ contentType: 'application/pdf', name: 'huge.pdf', size: 20 * 1024 * 1024 }),
+  ]);
+  assert.deepEqual(out.map(o => o.type), ['document', 'image']);
 });
