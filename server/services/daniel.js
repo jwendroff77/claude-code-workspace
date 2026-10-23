@@ -95,7 +95,7 @@ export function isApproval(note) {
 }
 
 // House style: no em or en dashes anywhere.
-export const noDashes = v => String(v).replace(/\s*[—–]\s*/g, ', ');
+export const noDashes = v => String(v).replace(/\s*[—–]\s*/g, ', ').replace(/\s+--+\s+/g, ', ');
 
 export function parsePlan(raw) {
   const m = String(raw || '').match(/\{[\s\S]*\}/);

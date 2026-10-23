@@ -66,6 +66,7 @@ test('no em or en dashes survive in anything Daniel writes', () => {
   const p = parsePlan('{"summary":"The body did not come through — only the wrapper.","owner":"daniel","steps":[{"who":"daniel","what":"Ask – nicely","due":null}]}');
   assert.ok(!/[—–]/.test(JSON.stringify(p)));
   assert.equal(p.summary, 'The body did not come through, only the wrapper.');
+  if (p.steps[1]) assert.equal(p.steps[1].what, 'Owner, not care');
 });
 
 test('never drafts an email to Jonathan or the team', () => {
@@ -95,4 +96,9 @@ test('reads attached screenshots and PDFs, skips logos and odd files', () => {
     att({ contentType: 'application/pdf', name: 'huge.pdf', size: 20 * 1024 * 1024 }),
   ]);
   assert.deepEqual(out.map(o => o.type), ['document', 'image']);
+});
+
+test('double-hyphen dashes are cleaned too', () => {
+  const p = parsePlan('{"summary":"Need a named owner -- not just care agents.","owner":"jenna","steps":[]}');
+  assert.equal(p.summary, 'Need a named owner, not just care agents.');
 });
