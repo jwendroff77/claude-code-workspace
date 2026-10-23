@@ -874,6 +874,7 @@ async function processPartnerCadences() {
   const ctNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' }));
   const minsSinceCtMidnight = ctNow.getHours() * 60 + ctNow.getMinutes();
   const DAILY_CAP = 125; // Jonathan raised from 100 on 2026-10-07
+  const KAYLA_DAILY_CAP = 175; // Kayla Pierce (agent 9) only - Jonathan 2026-10-22
 
   // A cross-agent "minimum gap since the last send from ANYONE" guard used to
   // live here. Removed 2026-09-03: it made Lauren wait on Megan's pace even
@@ -947,7 +948,7 @@ async function processPartnerCadences() {
      -- unbounded. This is a hard safety cap, not the per-channel target.
      AND (SELECT COUNT(*) FROM sent_emails se_cap
           WHERE se_cap.agent_id = pe.agent_id
-            AND se_cap.sent_at >= NOW() - INTERVAL ${minsSinceCtMidnight} MINUTE) < ${DAILY_CAP}
+            AND se_cap.sent_at >= NOW() - INTERVAL ${minsSinceCtMidnight} MINUTE) < IF(pe.agent_id = 9, ${KAYLA_DAILY_CAP}, ${DAILY_CAP})
      -- Dead-status backstop: inbox actions set prospects.status but historically
      -- only cancelled the DRIP enrollment; never send partner steps to dead leads
      AND p.status NOT IN ('disqualified', 'unsubscribed', 'bounced', 'booked', 'handed_off', 'won', 'engaged')
