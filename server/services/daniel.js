@@ -322,9 +322,9 @@ export function pickAttachments(list) {
     .map(a => ({ type: READABLE[a.contentType.toLowerCase()], source: { type: 'base64', media_type: a.contentType.toLowerCase(), data: a.contentBytes } }));
 }
 
-async function getFiles(msg) {
+async function getFiles(msg, mailbox = DANIEL_MAILBOX) {
   if (!msg.hasAttachments) return [];
-  const res = await g().api(`/users/${DANIEL_MAILBOX}/messages/${msg.id}/attachments`).get();
+  const res = await g().api(`/users/${mailbox}/messages/${msg.id}/attachments`).get();
   return pickAttachments(res.value);
 }
 
@@ -451,11 +451,25 @@ export function dueItems(rows, today) {
   return items.sort((a, b) => a.due.localeCompare(b.due));
 }
 
-export function renderDueList(items) {
+export function renderTriage(tri) {
+  if (!tri || tri.mode === 'off' || !tri.total) return '';
+  const head = tri.mode === 'watch'
+    ? `<b>Your inbox, last 24 hours</b> (watch-only, I did nothing): ${tri.total} emails, ${tri.items.length} need someone.`
+    : `<b>Your inbox, last 24 hours:</b> ${tri.total} emails, ${tri.items.length} need someone.  I emailed you a plan for each.`;
+  const line = i => `- ${esc(nameOf(i.owner))}${i.urgency === 'today' ? ' <b>(today)</b>' : ''}: ${esc(i.subject || '(no subject)')}  <span style="color:#64748b">(${esc(i.from_email || '')}${i.why ? '.  ' + esc(i.why) : ''})</span>`;
+  return head + (tri.items.length ? '<br><br>' + tri.items.map(line).join('<br>') : '');
+}
+
+export function renderDueList(items, tri = null) {
   const line = i => `- ${i.overdue ? '<b>Overdue</b> (was due' + fmtDue(i.due).replace(' (by', '').replace(')', '') + '):  ' : ''}${esc(nameOf(i.who))}: ${esc(i.what)}  <span style="color:#64748b">(${esc(i.subject)})</span>`;
-  return `Good morning Jonathan,<br><br>Here is what is due today${items.some(i => i.overdue) ? ', plus anything overdue' : ''}:<br><br>`
-    + items.map(line).join('<br>')
-    + '<br><br>Reply "done" on my original email for any item that is finished and it comes off the list.<br><br>Daniel';
+  const parts = ['Good morning Jonathan,'];
+  if (items.length) parts.push(`Here is what is due today${items.some(i => i.overdue) ? ', plus anything overdue' : ''}:<br><br>` + items.map(line).join('<br>'));
+  else parts.push('Nothing is due today.');
+  const t = renderTriage(tri);
+  if (t) parts.push(t);
+  if (items.length) parts.push('Reply "done" on my original email for any item that is finished and it comes off the list.');
+  parts.push('Daniel');
+  return parts.join('<br><br>');
 }
 
 export async function sendDueList(now = new Date()) {
@@ -465,11 +479,37 @@ export async function sendDueList(now = new Date()) {
   await pool.execute(`CREATE TABLE IF NOT EXISTS daniel_digests (digest_date DATE PRIMARY KEY, sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
   const [rows] = await pool.execute(`SELECT id, message_id, conversation_id, subject, status, plan_json FROM daniel_requests WHERE plan_json IS NOT NULL OR status='done'`);
   const items = dueItems(rows, today);
-  if (!items.length) return 0;
+  const { triageForList } = await import('./danielTriage.js');
+  const tri = await triageForList().catch(() => null);
+  if (!items.length && !(tri && tri.items.length)) return 0;
   const [claimed] = await pool.execute(`INSERT IGNORE INTO daniel_digests (digest_date) VALUES (?)`, [today]);
   if (claimed.affectedRows !== 1) return 0;   // already sent today
   const weekday = new Date(today + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'UTC' });
-  await sendMail({ fromEmail: DANIEL_MAILBOX, to: OWNER_EMAIL, subject: `Your list for ${weekday}`, html: renderDueList(items) });
+  await sendMail({ fromEmail: DANIEL_MAILBOX, to: OWNER_EMAIL, subject: `Your list for ${weekday}`, html: renderDueList(items, tri) });
   console.log(`[Daniel] Sent 8am list with ${items.length} item(s)`);
   return items.length;
+}
+
+// Act mode: Daniel found this in Jonathan's inbox.  Plan it and email Jonathan the plan.
+// Jonathan's replies to that email ("yes", "done", changes) work exactly like a forward.
+export async function planFromInbox(msg, verdict) {
+  await ensureTable();
+  const { TRIAGE_MAILBOX } = await import('./danielTriage.js');
+  const fromName = msg.from?.emailAddress?.name || msg.from?.emailAddress?.address || 'someone';
+  const forwarded = `From: ${fromName} <${msg.from?.emailAddress?.address || ''}>\nSent: ${msg.receivedDateTime}\nSubject: ${msg.subject || ''}\n\n${htmlToText(msg.body?.content || msg.bodyPreview || '')}`;
+  const files = await getFiles(msg, TRIAGE_MAILBOX());
+  const plan = await planRequest({ subject: msg.subject || '', note: `(I picked this up from Jonathan's inbox myself, he did not forward it.  First look: ${verdict.why})`, forwarded, files, source: msg.subject || '' });
+  delete plan.usage;
+  const html = `I picked this up from your inbox: <b>${esc(fromName)}</b>, "${esc(msg.subject || '')}".<br><br>` + renderPlanHtml(plan, { sendingOn: SEND_ON() });
+  // Draft first so we know the thread id, then send.  Jonathan's reply lands in that thread.
+  const draft = await g().api(`/users/${DANIEL_MAILBOX}/messages`).post({
+    subject: `Picked up: ${cleanSubject(msg.subject) || 'an email'}`,
+    body: { contentType: 'HTML', content: html },
+    toRecipients: [{ emailAddress: { address: OWNER_EMAIL } }],
+  });
+  await g().api(`/users/${DANIEL_MAILBOX}/messages/${draft.id}/send`).post({});
+  await pool.execute(
+    `INSERT IGNORE INTO daniel_requests (message_id, conversation_id, from_email, subject, received_at, note, plan_json, status) VALUES (?,?,?,?,?,?,?,?)`,
+    [('triage:' + msg.id).slice(0, 255), draft.conversationId, msg.from?.emailAddress?.address || null, (msg.subject || '').slice(0, 500),
+      msg.receivedDateTime ? new Date(msg.receivedDateTime) : null, '(picked up from inbox)', JSON.stringify(plan), plan.draft ? 'awaiting_approval' : 'planned']);
 }

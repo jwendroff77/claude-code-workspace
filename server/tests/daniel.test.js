@@ -129,3 +129,27 @@ test('8am list: due today and overdue, newest plan per thread, done threads drop
 test('today is computed in Central time', () => {
   assert.equal(todayISO(new Date('2026-10-27T03:30:00Z')), '2026-10-26');   // 10:30pm Monday in Minnesota
 });
+
+test('inbox reader: verdicts, labels, team mail skipped', async () => {
+  const { parseVerdict, labelFor, isFromTeam } = await import('../services/danielTriage.js');
+  const v = parseVerdict('{"category":"business","needs_action":true,"owner":"jenna","urgency":"today","why":"ACC bill missing — again"}');
+  assert.equal(labelFor(v), 'Daniel: Jenna');
+  assert.equal(v.why, 'ACC bill missing, again');
+  assert.equal(labelFor(parseVerdict('{"category":"business","needs_action":true,"owner":"jonathan","urgency":"today","why":"sign"}')), 'Daniel: Needs you');
+  assert.equal(labelFor(parseVerdict('{"category":"business","needs_action":false,"owner":"daniel","urgency":"fyi","why":"x"}')), 'Daniel: FYI');
+  assert.equal(labelFor(parseVerdict('{"category":"personal","needs_action":true,"owner":"jenna"}')), null);
+  assert.equal(parseVerdict('{"category":"personal","needs_action":true}').needs_action, false);
+  assert.equal(parseVerdict('{"category":"weird"}'), null);
+  assert.equal(parseVerdict('{"category":"business","owner":"bob"}').owner, 'jonathan');
+  assert.equal(isFromTeam('DReyes@1cloudcommunications.com'), true);
+  assert.equal(isFromTeam('steven_filek@comcast.com'), false);
+});
+
+test('8am list shows the inbox section and still sends with nothing due', () => {
+  const tri = { mode: 'watch', total: 38, items: [{ owner: 'jenna', urgency: 'today', subject: 'ACC invoice', from_email: 'billing@acc.com', why: 'Bill missing' }] };
+  const html = renderDueList([], tri);
+  assert.match(html, /Nothing is due today/);
+  assert.match(html, /watch-only, I did nothing\): 38 emails, 1 need someone/);
+  assert.match(html, /Jenna <b>\(today\)<\/b>: ACC invoice/);
+  assert.ok(!/[—–]/.test(html));
+});

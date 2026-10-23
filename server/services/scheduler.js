@@ -614,6 +614,18 @@ export function startScheduler() {
     }
   });
 
+  // Daniel reads Jonathan's inbox (DANIEL_TRIAGE_MODE=watch or act) — every 3 minutes.
+  cron.schedule('*/3 * * * *', async () => {
+    if (process.env.DANIEL_INBOX_ENABLED !== 'true') return;
+    if (!['watch', 'act'].includes(process.env.DANIEL_TRIAGE_MODE)) return;
+    try {
+      const { checkJonathanInbox } = await import('./danielTriage.js');
+      await checkJonathanInbox();
+    } catch (err) {
+      console.error('[Scheduler] Daniel triage error:', err.message);
+    }
+  });
+
   // Daniel's 8:00am list (Central time, weekdays): reminders and steps due today or overdue.
   cron.schedule('0 8 * * 1-5', async () => {
     if (process.env.DANIEL_INBOX_ENABLED !== 'true') return;
