@@ -18,7 +18,7 @@ export const MAILBOXES = {
   scott: 'smercer@1cloudnow.com',
 };
 
-const MAX_RESULT = 9000;   // characters per tool result
+const MAX_RESULT = 4000;   // characters per tool result (kept short: every character is re-read each step)
 const cap = s => (s.length > MAX_RESULT ? s.slice(0, MAX_RESULT) + '\n[cut off]' : s);
 
 export function cleanText(html) {
@@ -120,7 +120,7 @@ const fmtDate = d => (d ? new Date(d).toISOString().slice(0, 16).replace('T', ' 
 
 async function prospectSummary(rows) {
   const out = [];
-  for (const p of rows.slice(0, 6)) {
+  for (const p of rows.slice(0, 4)) {
     const [[agent]] = await pool.execute('SELECT name FROM agents WHERE id=(SELECT agent_id FROM sent_emails WHERE prospect_id=? ORDER BY sent_at DESC LIMIT 1)', [p.id]);
     const [enr] = await pool.execute(
       `SELECT e.status, e.current_step, a.name rep, pa.name partner FROM partner_enrollments e
@@ -160,7 +160,7 @@ async function lookupPerson({ query }) {
 function summarizeMessage(m) {
   const addr = list => (list || []).map(x => x.emailAddress?.name ? `${x.emailAddress.name} <${x.emailAddress.address}>` : x.emailAddress?.address).join(', ');
   const protectedMsg = /has sent you a protected message/i.test(m.bodyPreview || '');
-  const body = protectedMsg ? '[encrypted message, cannot be read]' : newestPart(cleanText(m.body?.content || m.bodyPreview || '')).slice(0, 1200);
+  const body = protectedMsg ? '[encrypted message, cannot be read]' : newestPart(cleanText(m.body?.content || m.bodyPreview || '')).slice(0, 600);
   return `id: ${m.id}\ndate: ${fmtDate(m.receivedDateTime)}\nfrom: ${addr([m.from])}\nto: ${addr(m.toRecipients)}\ncc: ${addr(m.ccRecipients)}\nsubject: ${m.subject}\n${body}`;
 }
 
@@ -169,7 +169,7 @@ async function searchMailbox({ mailbox, query }) {
   if (!mb) return `Unknown mailbox.  Use one of: ${Object.keys(MAILBOXES).join(', ')}`;
   const q = String(query || '').replace(/["\\]/g, ' ').trim();
   if (!q) return 'Empty search.';
-  const res = await g().api(`/users/${mb}/messages`).search(`"${q}"`).top(8)
+  const res = await g().api(`/users/${mb}/messages`).search(`"${q}"`).top(5)
     .select('id,subject,from,toRecipients,ccRecipients,receivedDateTime,bodyPreview,body').get();
   const msgs = (res.value || []).sort((a, b) => String(b.receivedDateTime).localeCompare(String(a.receivedDateTime)));
   if (!msgs.length) return `Nothing in ${mailbox}'s mailbox for "${q}".`;
@@ -244,7 +244,7 @@ export async function recall({ query }) {
   if (!words.length) return 'Give a company, person or topic.';
   const like = words.map(() => '(LOWER(topic) LIKE ? OR LOWER(note) LIKE ?)').join(' OR ');
   const args = words.flatMap(w => [`%${w}%`, `%${w}%`]);
-  const [notes] = await pool.execute(`SELECT kind, topic, note, created_at FROM daniel_memory WHERE ${like} ORDER BY created_at DESC LIMIT 20`, args);
+  const [notes] = await pool.execute(`SELECT kind, topic, note, created_at FROM daniel_memory WHERE ${like} ORDER BY created_at DESC LIMIT 12`, args);
   const reqLike = words.map(() => 'LOWER(subject) LIKE ?').join(' OR ');
   const [reqs] = await pool.execute(
     `SELECT subject, status, created_at, plan_json FROM daniel_requests WHERE plan_json IS NOT NULL AND (${reqLike}) ORDER BY id DESC LIMIT 5`, words.map(w => `%${w}%`));

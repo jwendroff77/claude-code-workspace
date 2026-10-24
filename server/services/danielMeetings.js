@@ -22,15 +22,14 @@ export function addBusinessDays(iso, n) {
 }
 
 const PREP_RULES = `
-
 MEETING PREP
-Ignore the plan JSON format above.  Write prep for one meeting on Jonathan's calendar.
+This job is meeting prep for one meeting on Jonathan's calendar, not an email plan.
 - Look first: recall (your notes on the company and people), lookup_company / lookup_person (use the attendees' email domains), search_mailbox kayla (Comcast partner threads), then at most one or two web searches for company basics if your notes are thin.
 - If your notes say prep for this meeting was already sent, answer {"already_sent": true}.
 - If it is not a sales, customer, carrier or partner meeting (for example a personal appointment or a vendor demo), keep it to two lines.
-- Be specific and short.  No em dashes.  Two spaces after each sentence.
+- Be specific and short.  No em dashes.  Two spaces after each sentence.`;
 
-Answer JSON only:
+const PREP_FORMAT = `When you are done, your final message is JSON only, no other text (not the plan format):
 {"already_sent": false,
  "company": "...",
  "who": ["Name, title, contact, one line on their role in this"],
@@ -95,7 +94,7 @@ export async function prepUpcomingMeetings(now = new Date()) {
     try {
       const prefs = await preferences().catch(() => '');
       const messages = [{ role: 'user', content: `Today is ${todayCT()}.\n${prefs ? `Jonathan's standing preferences:\n${prefs}\n` : ''}\nThe meeting:\n${describeEvent(ev)}\n\nInvite text:\n<email>\n${String(ev.bodyPreview || '').slice(0, 1500)}\n</email>` }];
-      const p = await runAgent({ systemText: systemPrompt() + PREP_RULES, messages, parse: parsePrep, source: 'meeting prep', what: 'meeting prep' });
+      const p = await runAgent({ systemText: systemPrompt(PREP_RULES, PREP_FORMAT), messages, parse: parsePrep, source: 'meeting prep', what: 'meeting prep' });
       if (p.already_sent) { await pool.execute(`UPDATE daniel_meeting_prep SET status='already_sent' WHERE event_key=?`, [key]); continue; }
       sections.push({ ev, p });
       await pool.execute(`UPDATE daniel_meeting_prep SET status='prepped' WHERE event_key=?`, [key]);

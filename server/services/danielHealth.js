@@ -109,8 +109,16 @@ async function danielErrors() {
   return notes.length ? { key: 'daniel-errors', level: 'note', text: `Daniel had trouble: ${notes.join(', ')} in the last day.` } : null;
 }
 
+async function danielCost() {
+  try {
+    const [r] = await q(`SELECT COALESCE(SUM(cost),0) s, COUNT(*) n FROM daniel_usage WHERE created_at > NOW() - INTERVAL 1 DAY`);
+    const budget = parseFloat(process.env.DANIEL_DAILY_BUDGET || '1');
+    return { key: 'daniel-cost', level: 'note', text: `Daniel cost $${Number(r.s).toFixed(2)} in the last 24 hours (${r.n} requests, daily cap $${budget.toFixed(2)}).` };
+  } catch { return null; }
+}
+
 const ALARM_CHECKS = [replySorting, apiCredit, sendsStopped, sentAfterStop, bounces];
-const NOTE_CHECKS = [idleReps, partnerBacklog, danielErrors];
+const NOTE_CHECKS = [idleReps, partnerBacklog, danielErrors, danielCost];
 
 async function run(checks, now) {
   const out = [];

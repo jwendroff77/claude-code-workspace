@@ -76,13 +76,16 @@ export async function firstPass(msg) {
   const protectedMsg = /has sent you a protected message/i.test(msg.bodyPreview || '');
   const body = protectedMsg ? '[encrypted, body not readable; judge from sender and subject]' : newestPart(cleanText(msg.body?.content || msg.bodyPreview || '')).slice(0, 2000);
   const content = `From: ${msg.from?.emailAddress?.name || ''} <${msg.from?.emailAddress?.address || ''}>\nTo: ${addr(msg.toRecipients)}\nCc: ${addr(msg.ccRecipients)}\nSubject: ${msg.subject || ''}\n\n<email>\n${body}\n</email>`;
+  const model = process.env.DANIEL_TRIAGE_MODEL || 'claude-haiku-5-5';
   const res = await ai().messages.create({
-    model: process.env.DANIEL_TRIAGE_MODEL || 'claude-haiku-5-5',
+    model,
     max_tokens: 1000,
     output_config: { effort: 'low' },
     system: TRIAGE_PROMPT,
     messages: [{ role: 'user', content }],
   });
+  const { logUsage } = await import('./daniel.js');
+  logUsage('inbox sort', model, { input: res.usage?.input_tokens, output: res.usage?.output_tokens });
   return parseVerdict((res.content || []).filter(b => b.type === 'text').map(b => b.text).join(''));
 }
 

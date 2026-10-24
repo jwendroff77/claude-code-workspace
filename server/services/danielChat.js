@@ -2,12 +2,12 @@
 // and drafts Jonathan sends with a Send button.
 import crypto from 'crypto';
 import pool from '../db/connection.js';
-import { runAgent, systemPrompt, sendDraft, SEND_ON, todayCT, TEAM, parsePlan, noDashes } from './daniel.js';
+import { runAgent, systemPrompt, sendDraft, SEND_ON, todayCT, TEAM, parsePlan, noDashes, DANIEL_LIGHT_MODEL } from './daniel.js';
 import { preferences, remember, MAILBOXES } from './danielTools.js';
 import { replyToMessage } from './graph.js';
 import { AUTONOMY_TOOL, setAutonomy, approveAction, cancelAction, pendingActions, autonomy } from './danielActions.js';
 
-const HISTORY_TURNS = 12;
+const HISTORY_TURNS = 6;
 
 let ready = false;
 async function ensureTables() {
@@ -31,9 +31,8 @@ async function ensureTables() {
 }
 
 const CHAT_RULES = `
-
 TEAMS CHAT
-You are now chatting with Jonathan in Microsoft Teams.  Ignore the plan JSON format above; in chat use the format below.
+You are chatting with Jonathan in Microsoft Teams.  This is a conversation, not an email plan.
 - Answer like a sharp coworker: short, plain text, a few sentences or a short list.  No headings.  No em dashes.
 - Look things up with your tools before answering, same as for email.
 - If he asks you to email someone, write the draft.  He sees it with Send and Cancel buttons, and it goes out only when he taps Send.  To answer inside an existing thread (for example Kayla's thread with Steven), find the message with search_mailbox and put its mailbox and id in reply_to; it is then sent as a reply-all from that mailbox.
@@ -41,10 +40,10 @@ You are now chatting with Jonathan in Microsoft Teams.  Ignore the plan JSON for
 - If he asks to be reminded, add a reminder with a due date.  It shows on his 8:00am list that day.
 - Use list_open_items when he asks what is open, and mark_done when he says something is finished.
 - Sales-platform actions that wait for his OK show him Approve and Cancel buttons.  If he answers in words instead ("yes do it", "skip that one"), use decide_action.
-- Only when he explicitly tells you to change how you work ("just do contact switches from now on", "ask me before stopping cadences"), use set_autonomy, then confirm the new setting in one line.
+- Only when he explicitly tells you to change how you work ("just do contact switches from now on", "ask me before stopping cadences"), use set_autonomy, then confirm the new setting in one line.`;
 
-Your final message is JSON only:
-{"reply": "what you say back",
+const CHAT_FORMAT = `When you are done, your final message is JSON only, no other text (not the plan format):
+{"reply": "what you say back to Jonathan",
  "draft": null or {"from": "daniel|jenna|hannah", "to": ["email"], "cc": ["email"], "subject": "...", "body": "plain text", "reply_to": null or {"mailbox": "kayla", "id": "message id"}},
  "reminders": [{"what": "...", "due": "YYYY-MM-DD"}]}`;
 
@@ -120,7 +119,8 @@ export async function chatTurn({ conversationId, text }) {
   const prefs = await preferences().catch(() => '');
   const messages = await history(conversationId);
   messages.push({ role: 'user', content: `Today is ${todayCT()}.\n${prefs ? `Jonathan's standing preferences:\n${prefs}\n` : ''}\nJonathan: ${text}` });
-  const out = await runAgent({ systemText: systemPrompt() + CHAT_RULES, messages, parse: parseChat, source: 'teams', what: 'reply', extraTools: EXTRA_TOOLS, extraRun, ctx: { origin: 'teams', conversationId } });
+  // Chat: low effort is Anthropic's recommendation for chat on this model and keeps lookups short.
+  const out = await runAgent({ systemText: systemPrompt(CHAT_RULES, CHAT_FORMAT), messages, parse: parseChat, source: 'teams', what: 'reply', extraTools: EXTRA_TOOLS, extraRun, ctx: { origin: 'teams', conversationId }, model: DANIEL_LIGHT_MODEL(), effort: 'low' });
 
   await pool.execute('INSERT INTO daniel_chat (conversation_id, role, text) VALUES (?,?,?), (?,?,?)',
     [conversationId, 'user', text, conversationId, 'assistant', out.reply + (out.draft ? `\n[draft to ${out.draft.to.join(', ')}: ${out.draft.subject}]` : '')]);

@@ -72,10 +72,13 @@ Answer JSON only: {"opener": "one or two sentences: what matters most today", "a
 
 async function lookingAhead(data) {
   try {
+    const model = process.env.DANIEL_LIGHT_MODEL || 'claude-sonnet-5-5';
     const res = await new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }).messages.create({
-      model: process.env.DANIEL_MODEL || 'claude-opus-5-5', max_tokens: 4000, output_config: { effort: 'medium' },
+      model, max_tokens: 4000, output_config: { effort: 'low' },
       system: AHEAD_PROMPT, messages: [{ role: 'user', content: JSON.stringify(data) }],
     });
+    const { logUsage } = await import('./daniel.js');
+    logUsage('brief', model, { input: res.usage?.input_tokens, output: res.usage?.output_tokens });
     const m = (res.content || []).filter(b => b.type === 'text').map(b => b.text).join('').match(/\{[\s\S]*\}/);
     const o = m ? JSON.parse(m[0]) : {};
     return { opener: noDash(o.opener || ''), ahead: (Array.isArray(o.ahead) ? o.ahead : []).map(noDash).slice(0, 5) };
