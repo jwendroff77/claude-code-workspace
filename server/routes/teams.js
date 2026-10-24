@@ -96,6 +96,23 @@ export function draftCard(d, draftId, fromName) {
   };
 }
 
+export function actionCard(a) {
+  return {
+    contentType: 'application/vnd.microsoft.card.adaptive',
+    content: {
+      type: 'AdaptiveCard', version: '1.4', $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+      body: [
+        { type: 'TextBlock', text: 'Waiting for your OK', weight: 'Bolder' },
+        { type: 'TextBlock', text: a.summary, wrap: true },
+      ],
+      actions: [
+        { type: 'Action.Submit', title: 'Approve', data: { action: 'approve_action', actionId: a.id } },
+        { type: 'Action.Submit', title: 'Cancel', data: { action: 'cancel_action', actionId: a.id } },
+      ],
+    },
+  };
+}
+
 // ---------- Daniel starting a message himself (alarms, heads-ups) ----------
 
 let refReady = false;
@@ -144,6 +161,12 @@ async function handle(activity) {
   const { chatTurn, resolveDraft } = await import('../services/danielChat.js');
   const conversationId = activity.conversation.id;
 
+  if (['approve_action', 'cancel_action'].includes(activity.value?.action) && activity.value?.actionId) {
+    const { approveAction, cancelAction } = await import('../services/danielActions.js');
+    const id = parseInt(activity.value.actionId, 10);
+    return say(activity, activity.value.action === 'approve_action' ? await approveAction(id) : await cancelAction(id));
+  }
+
   if (activity.value?.action && activity.value?.draftId) {
     const text = await resolveDraft({ conversationId, draftId: parseInt(activity.value.draftId, 10), action: activity.value.action });
     return say(activity, text);
@@ -161,6 +184,7 @@ async function handle(activity) {
       const { TEAM } = await import('../services/daniel.js');
       await send(activity, { attachments: [draftCard(out.draft, out.draftId, TEAM[out.draft.from]?.name || out.draft.from)] });
     }
+    for (const a of out.waiting || []) await send(activity, { attachments: [actionCard(a)] });
   } catch (e) {
     clearInterval(keepTyping);
     console.error('[Teams] chat failed:', e.message);

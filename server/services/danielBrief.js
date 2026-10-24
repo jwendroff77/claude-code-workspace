@@ -97,7 +97,8 @@ export function renderBrief(b) {
   const needs = [
     ...b.due.map(i => `${i.overdue ? '<b>Overdue:</b> ' : ''}${esc(first(TEAM[i.who]?.name || i.who))}: ${esc(i.what)}  <span style="color:#64748b">(${esc(i.subject)})</span>`),
     ...b.replies.map(r => `<b>${esc(r.company || '')}</b>, ${esc(`${r.first_name || ''} ${r.last_name || ''}`.trim())} (${esc(r.sentiment.replace('_', ' '))}, to ${esc(first(r.agent))}): "${esc(String(r.said || '').replace(/\s+/g, ' ').slice(0, 120))}"  Reply from the sales platform Inbox.`),
-    ...b.approvals.map(a => `<b>${esc(a.company || '')}</b>: switch the cadence to ${esc(a.new_name || '')}${a.new_title ? ', ' + esc(a.new_title) : ''}?  Approve in the sales platform.`),
+    ...(b.waiting || []).map(a => `<b>Waiting for your OK:</b> ${esc(a.summary)}  <span style="color:#64748b">(Approve in Teams, or reply yes on my email)</span>`),
+    ...b.approvals.map(a => `<b>${esc(a.company || '')}</b>: switch the cadence to ${esc(a.new_name || '')}${a.new_title ? ', ' + esc(a.new_title) : ''}?  Tell me "approve" in Teams, or approve in the sales platform.`),
   ];
   parts.push(H(`Needs you (${needs.length})`, '#b45309'), needs.length ? UL(needs) : '<p>Nothing today.</p>');
 
@@ -135,6 +136,8 @@ export async function buildBrief(now = new Date()) {
     repliesWaiting(), approvalsWaiting(), teamLines(), doneYesterday(), meetingsAhead(today), healthForBrief(now),
   ]);
   const due = dueItems(rows, today);
+  const { pendingActions } = await import('./danielActions.js');
+  const waiting = await pendingActions().catch(() => []);
   const { triageForList } = await import('./danielTriage.js');
   const triage = await triageForList().catch(() => null);
   const [notes] = await pool.execute(`SELECT kind, topic, note FROM daniel_memory WHERE kind IN ('fact','done') ORDER BY id DESC LIMIT 40`).catch(() => [[]]);
@@ -145,7 +148,7 @@ export async function buildBrief(now = new Date()) {
     due_today: due, replies_waiting: replies.length, approvals_waiting: approvals.length, health, team,
     calendar_next_two_weeks: upcoming, notes,
   });
-  return { opener, due, replies, approvals, meetings, done, health, team, triage, ahead };
+  return { opener, due, replies, approvals, waiting, meetings, done, health, team, triage, ahead };
 }
 
 export async function sendBrief(now = new Date()) {

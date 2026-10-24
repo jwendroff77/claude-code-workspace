@@ -5,6 +5,7 @@ import pool from '../db/connection.js';
 import { runAgent, systemPrompt, sendDraft, SEND_ON, todayCT, TEAM, parsePlan, noDashes } from './daniel.js';
 import { preferences, remember, MAILBOXES } from './danielTools.js';
 import { replyToMessage } from './graph.js';
+import { AUTONOMY_TOOL, setAutonomy, approveAction, cancelAction, pendingActions, autonomy } from './danielActions.js';
 
 const HISTORY_TURNS = 12;
 
@@ -39,6 +40,8 @@ You are now chatting with Jonathan in Microsoft Teams.  Ignore the plan JSON for
 - Never say you sent or emailed something from chat.  A draft waits for his Send tap, so say "here's the draft" instead.
 - If he asks to be reminded, add a reminder with a due date.  It shows on his 8:00am list that day.
 - Use list_open_items when he asks what is open, and mark_done when he says something is finished.
+- Sales-platform actions that wait for his OK show him Approve and Cancel buttons.  If he answers in words instead ("yes do it", "skip that one"), use decide_action.
+- Only when he explicitly tells you to change how you work ("just do contact switches from now on", "ask me before stopping cadences"), use set_autonomy, then confirm the new setting in one line.
 
 Your final message is JSON only:
 {"reply": "what you say back",
@@ -61,13 +64,24 @@ export function parseChat(raw) {
   return { reply: noDashes(o.reply), draft, reminders };
 }
 
-// Chat-only tools: what is open on Jonathan's list, and closing items.
+// Chat-only tools: what is open on Jonathan's list, closing items, deciding waiting actions,
+// and the ask-first / just-do-it switches (only from Jonathan's own words in this chat).
 const EXTRA_TOOLS = [
+  AUTONOMY_TOOL,
+  { name: 'decide_action', description: 'Approve or cancel a sales-platform action that is waiting for Jonathan (when he says yes or no to it in chat).', input_schema: { type: 'object', properties: { id: { type: 'integer' }, decision: { type: 'string', enum: ['approve', 'cancel'] } }, required: ['id', 'decision'], additionalProperties: false } },
+  { name: 'list_waiting_actions', description: 'Sales-platform actions waiting for Jonathan\'s OK, with ids.', input_schema: { type: 'object', properties: {}, additionalProperties: false } },
   { name: 'list_open_items', description: "List open items from Daniel's requests (with ids), including steps and due dates.", input_schema: { type: 'object', properties: {}, additionalProperties: false } },
   { name: 'mark_done', description: 'Mark one open item done by its id from list_open_items.', input_schema: { type: 'object', properties: { id: { type: 'integer' } }, required: ['id'], additionalProperties: false } },
 ];
 
 async function extraRun(name, input) {
+  if (name === 'set_autonomy') return { content: await setAutonomy(input.action, input.mode) };
+  if (name === 'decide_action') return { content: input.decision === 'approve' ? await approveAction(input.id) : await cancelAction(input.id) };
+  if (name === 'list_waiting_actions') {
+    const rows = await pendingActions();
+    const modes = await autonomy();
+    return { content: (rows.map(a => `action ${a.id}: ${a.summary}`).join('\n') || 'Nothing waiting.') + '\n\nCurrent settings: ' + Object.entries(modes).map(([k, v]) => `${k}=${v}`).join(', ') };
+  }
   if (name === 'list_open_items') {
     const [rows] = await pool.execute(`SELECT id, conversation_id, subject, plan_json FROM daniel_requests
       WHERE status IN ('planned','awaiting_approval','approved_send_off','sent') AND plan_json IS NOT NULL ORDER BY id DESC LIMIT 40`);
@@ -106,7 +120,7 @@ export async function chatTurn({ conversationId, text }) {
   const prefs = await preferences().catch(() => '');
   const messages = await history(conversationId);
   messages.push({ role: 'user', content: `Today is ${todayCT()}.\n${prefs ? `Jonathan's standing preferences:\n${prefs}\n` : ''}\nJonathan: ${text}` });
-  const out = await runAgent({ systemText: systemPrompt() + CHAT_RULES, messages, parse: parseChat, source: 'teams', what: 'reply', extraTools: EXTRA_TOOLS, extraRun });
+  const out = await runAgent({ systemText: systemPrompt() + CHAT_RULES, messages, parse: parseChat, source: 'teams', what: 'reply', extraTools: EXTRA_TOOLS, extraRun, ctx: { origin: 'teams', conversationId } });
 
   await pool.execute('INSERT INTO daniel_chat (conversation_id, role, text) VALUES (?,?,?), (?,?,?)',
     [conversationId, 'user', text, conversationId, 'assistant', out.reply + (out.draft ? `\n[draft to ${out.draft.to.join(', ')}: ${out.draft.subject}]` : '')]);
@@ -122,7 +136,7 @@ export async function chatTurn({ conversationId, text }) {
     const [ins] = await pool.execute('INSERT INTO daniel_chat_drafts (conversation_id, draft_json) VALUES (?,?)', [conversationId, JSON.stringify(out.draft)]);
     draftId = ins.insertId;
   }
-  return { reply: out.reply, draft: out.draft, draftId };
+  return { reply: out.reply, draft: out.draft, draftId, waiting: (out.actions || []).filter(a => a.status === 'pending') };
 }
 
 // Send or cancel a draft from its Teams button.  Returns the text to show.

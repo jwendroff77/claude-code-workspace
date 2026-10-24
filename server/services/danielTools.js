@@ -4,6 +4,7 @@ import { ClientSecretCredential } from '@azure/identity';
 import { Client } from '@microsoft/microsoft-graph-client';
 import { TokenCredentialAuthenticationProvider } from '@microsoft/microsoft-graph-client/authProviders/azureTokenCredentials/index.js';
 import pool from '../db/connection.js';
+import { ACTION_TOOL, LIST_TOOLS, proposeOrRun, runListTool } from './danielActions.js';
 
 // Mailboxes Daniel may search.  Jonathan's own inbox is not here on purpose (that is a later phase).
 export const MAILBOXES = {
@@ -281,6 +282,11 @@ const IMPL = {
   recall,
   remember: (input, ctx) => remember(input, ctx?.source),
 };
+
+// Sales-platform actions and the lists that find their ids (danielActions.js).
+TOOL_DEFS.push(ACTION_TOOL, ...LIST_TOOLS);
+IMPL.platform_action = (input, ctx) => proposeOrRun(input, ctx);
+for (const t of LIST_TOOLS) IMPL[t.name] = () => runListTool(t.name);
 
 export async function runTool(name, input, ctx = {}) {
   const fn = IMPL[name];
