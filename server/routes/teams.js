@@ -96,6 +96,38 @@ export function draftCard(d, draftId, fromName) {
   };
 }
 
+// ---------- Daniel starting a message himself (alarms, heads-ups) ----------
+
+let refReady = false;
+async function refTable(pool) {
+  if (refReady) return;
+  await pool.execute(`CREATE TABLE IF NOT EXISTS daniel_teams_ref (
+    id INT PRIMARY KEY, service_url VARCHAR(500) NOT NULL, conversation_id VARCHAR(500) NOT NULL,
+    bot_json TEXT NOT NULL, user_json TEXT NOT NULL, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)`);
+  refReady = true;
+}
+
+// Remember where Jonathan's 1:1 chat with Daniel lives, so Daniel can write first.
+async function saveRef(activity) {
+  const pool = (await import('../db/connection.js')).default;
+  await refTable(pool);
+  await pool.execute(
+    `REPLACE INTO daniel_teams_ref (id, service_url, conversation_id, bot_json, user_json) VALUES (1,?,?,?,?)`,
+    [activity.serviceUrl, activity.conversation.id, JSON.stringify(activity.recipient), JSON.stringify(activity.from)]);
+}
+
+// Send Jonathan a Teams message.  Returns false if Teams is not set up or he has never chatted.
+export async function notifyJonathan(text) {
+  if (!APP_ID() || !process.env.TEAMS_BOSS_AAD_ID) return false;
+  const pool = (await import('../db/connection.js')).default;
+  await refTable(pool);
+  const [[r]] = await pool.execute('SELECT * FROM daniel_teams_ref WHERE id=1');
+  if (!r || !SERVICE_URL_OK.test(r.service_url)) return false;
+  await send({ serviceUrl: r.service_url, conversation: { id: r.conversation_id }, recipient: JSON.parse(r.bot_json), from: JSON.parse(r.user_json) },
+    { type: 'message', text, textFormat: 'plain' });
+  return true;
+}
+
 // ---------- handling a message ----------
 
 async function handle(activity) {
@@ -107,6 +139,7 @@ async function handle(activity) {
   const boss = process.env.TEAMS_BOSS_AAD_ID;
   if (!boss) return say(activity, `I'm almost set up.  Add this in Railway as TEAMS_BOSS_AAD_ID: ${activity.from?.aadObjectId || '(no id)'}`);
   if (activity.from?.aadObjectId !== boss) return say(activity, 'Sorry, I only take requests from Jonathan.');
+  await saveRef(activity).catch(e => console.error('[Teams] could not save chat reference:', e.message));
 
   const { chatTurn, resolveDraft } = await import('../services/danielChat.js');
   const conversationId = activity.conversation.id;

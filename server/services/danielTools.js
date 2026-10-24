@@ -66,6 +66,15 @@ export const TOOL_DEFS = [
     input_schema: { type: 'object', properties: { mailbox: { type: 'string', enum: Object.keys(MAILBOXES) }, id: { type: 'string' } }, required: ['mailbox', 'id'], additionalProperties: false },
   },
   {
+    name: 'get_calendar',
+    description: "Read Jonathan's Outlook calendar between two dates (Central time, at most 31 days).  Returns each meeting with time, subject, organizer, attendees, location and whether it is online.",
+    input_schema: {
+      type: 'object',
+      properties: { start: { type: 'string', description: 'YYYY-MM-DD' }, end: { type: 'string', description: 'YYYY-MM-DD, inclusive' } },
+      required: ['start', 'end'], additionalProperties: false,
+    },
+  },
+  {
     name: 'recall',
     description: "Search your own notes: what the team already did, decisions, Jonathan's preferences, facts about customers and partners, and earlier requests Jonathan sent you.",
     input_schema: { type: 'object', properties: { query: { type: 'string', description: 'company, person or topic' } }, required: ['query'], additionalProperties: false },
@@ -175,6 +184,59 @@ async function getEmail({ mailbox, id }) {
   return summarizeMessage({ ...m, body: { content: '' } }) + '\n\n' + cleanText(m.body?.content).slice(0, 7000);
 }
 
+// ---------- calendar ----------
+
+export const CALENDAR_USER = () => process.env.DANIEL_CALENDAR_USER || 'jonathan@1cloudcommunications.com';
+export const INTERNAL_DOMAINS = ['1cloudcommunications.com', '1cloudnow.com'];
+const isInternal = addr => INTERNAL_DOMAINS.includes(String(addr || '').toLowerCase().split('@')[1] || '');
+
+// Events between two YYYY-MM-DD dates (inclusive), times in Central.
+export async function calendarEvents(start, end) {
+  const s = `${start}T00:00:00`;
+  const e = new Date(`${end}T00:00:00Z`); e.setUTCDate(e.getUTCDate() + 1);
+  const res = await g().api(`/users/${CALENDAR_USER()}/calendarView`)
+    .header('Prefer', 'outlook.timezone="Central Standard Time"')
+    .query({ startDateTime: s, endDateTime: e.toISOString().slice(0, 19) })
+    .select('id,iCalUId,subject,start,end,location,organizer,attendees,isOnlineMeeting,isAllDay,isCancelled,showAs,responseStatus,bodyPreview,webLink')
+    .orderby('start/dateTime').top(150).get();
+  return (res.value || []).filter(ev => !ev.isCancelled);
+}
+
+// A meeting with someone outside 1Cloud that Jonathan has not declined.
+export function isOutsideMeeting(ev) {
+  if (!ev || ev.isAllDay || ev.isCancelled) return false;
+  if (ev.responseStatus?.response === 'declined') return false;
+  const people = [ev.organizer?.emailAddress?.address, ...(ev.attendees || []).map(a => a.emailAddress?.address)].filter(Boolean);
+  return people.some(a => !isInternal(a));
+}
+
+export function describeEvent(ev) {
+  const t = d => String(d || '').slice(11, 16);
+  const day = new Date(String(ev.start?.dateTime).slice(0, 10) + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+  const who = (ev.attendees || []).map(a => `${a.emailAddress?.name || ''} <${a.emailAddress?.address || ''}>${a.status?.response && a.status.response !== 'none' ? ' (' + a.status.response + ')' : ''}`).join(', ');
+  return `${day} ${ev.isAllDay ? 'all day' : t(ev.start?.dateTime) + '-' + t(ev.end?.dateTime) + ' CT'}: ${ev.subject || '(no subject)'}`
+    + `\n  organizer: ${ev.organizer?.emailAddress?.name || ''} <${ev.organizer?.emailAddress?.address || ''}>`
+    + (who ? `\n  attendees: ${who}` : '')
+    + (ev.location?.displayName ? `\n  location: ${ev.location.displayName}` : '')
+    + (ev.isOnlineMeeting ? '\n  online meeting' : '')
+    + (ev.responseStatus?.response && ev.responseStatus.response !== 'organizer' ? `\n  Jonathan's response: ${ev.responseStatus.response}` : '')
+    + (isOutsideMeeting(ev) ? '\n  outside meeting' : '');
+}
+
+const NO_CALENDAR = "I can't read the calendar yet: the platform still needs the Calendars.Read permission in Microsoft.";
+
+async function getCalendar({ start, end }) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start || '') || !/^\d{4}-\d{2}-\d{2}$/.test(end || '')) return 'Use YYYY-MM-DD dates.';
+  if ((new Date(end) - new Date(start)) / 864e5 > 31) return 'At most 31 days at a time.';
+  try {
+    const evs = await calendarEvents(start, end);
+    return evs.length ? evs.map(describeEvent).join('\n') : `Nothing on the calendar from ${start} to ${end}.`;
+  } catch (e) {
+    if (/403|Access is denied|Authorization_RequestDenied|ErrorAccessDenied/i.test(String(e.statusCode) + ' ' + e.message)) return NO_CALENDAR;
+    throw e;
+  }
+}
+
 export async function recall({ query }) {
   await ensureMemoryTable();
   const words = String(query || '').toLowerCase().split(/[^a-z0-9@.&]+/).filter(w => w.length >= 3).slice(0, 6);
@@ -215,6 +277,7 @@ const IMPL = {
   lookup_person: lookupPerson,
   search_mailbox: searchMailbox,
   get_email: getEmail,
+  get_calendar: getCalendar,
   recall,
   remember: (input, ctx) => remember(input, ctx?.source),
 };

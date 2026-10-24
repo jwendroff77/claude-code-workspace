@@ -626,16 +626,42 @@ export function startScheduler() {
     }
   });
 
-  // Daniel's 8:00am list (Central time, weekdays): reminders and steps due today or overdue.
+  // Daniel's meeting prep, 2 business days ahead (Central time, weekdays 7:30am).
+  cron.schedule('30 7 * * 1-5', async () => {
+    if (process.env.DANIEL_INBOX_ENABLED !== 'true') return;
+    try {
+      const { prepUpcomingMeetings } = await import('./danielMeetings.js');
+      await prepUpcomingMeetings();
+    } catch (err) {
+      console.error('[Scheduler] Daniel meeting prep error:', err.message);
+    }
+  }, { timezone: 'America/Chicago' });
+
+  // Daniel's morning brief (Central time, weekdays 8:00am): needs you, meetings, health, team, looking ahead.
   cron.schedule('0 8 * * 1-5', async () => {
     if (process.env.DANIEL_INBOX_ENABLED !== 'true') return;
     try {
-      const { sendDueList } = await import('./daniel.js');
-      await sendDueList();
+      const { sendBrief } = await import('./danielBrief.js');
+      await sendBrief();
     } catch (err) {
-      console.error('[Scheduler] Daniel 8am list error:', err.message);
+      console.error('[Scheduler] Daniel brief error:', err.message);
+      try {   // never lose the reminders: fall back to the plain list
+        const { sendDueList } = await import('./daniel.js');
+        await sendDueList();
+      } catch (e2) { console.error('[Scheduler] Daniel 8am list error:', e2.message); }
     }
   }, { timezone: 'America/Chicago' });
+
+  // Daniel's alarms: every 15 minutes, weekdays 7am-6pm CT (checks itself), each alarm at most every 6 hours.
+  cron.schedule('*/15 * * * *', async () => {
+    if (process.env.DANIEL_INBOX_ENABLED !== 'true') return;
+    try {
+      const { checkAndAlert } = await import('./danielHealth.js');
+      await checkAndAlert();
+    } catch (err) {
+      console.error('[Scheduler] Daniel health error:', err.message);
+    }
+  });
 
   // IMAP poll — every 5 minutes
   cron.schedule('*/5 * * * *', async () => {

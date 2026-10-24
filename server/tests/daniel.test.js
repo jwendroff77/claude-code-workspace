@@ -153,3 +153,39 @@ test('8am list shows the inbox section and still sends with nothing due', () => 
   assert.match(html, /Jenna <b>\(today\)<\/b>: ACC invoice/);
   assert.ok(!/[—–]/.test(html));
 });
+
+test('business days and Central time for the brief and prep', async () => {
+  const { addBusinessDays } = await import('../services/danielMeetings.js');
+  assert.equal(addBusinessDays('2026-10-26', 2), '2026-10-28');   // Mon -> Wed
+  assert.equal(addBusinessDays('2026-10-23', 2), '2026-10-27');   // Fri -> Tue
+  assert.equal(addBusinessDays('2026-10-29', 2), '2026-11-02');   // Thu -> Mon
+  const { centralNow } = await import('../services/danielHealth.js');
+  assert.deepEqual(centralNow(new Date('2026-10-26T13:05:00Z')), { hour: 8, weekday: 'Mon', isWeekday: true });
+  assert.equal(centralNow(new Date('2026-10-25T15:00:00Z')).isWeekday, false);
+});
+
+test('meeting prep parsing', async () => {
+  const { parsePrep, renderPrep } = await import('../services/danielMeetings.js');
+  assert.deepEqual(parsePrep('{"already_sent": true}'), { already_sent: true });
+  const p = parsePrep('{"company":"Krevolin — Horst","who":["Ben Winstead"],"about":"Law firm.","told_us":[],"angle":"Backup line.","questions":["Who is your carrier?"],"goal":"Get a bill."}');
+  assert.equal(p.company, 'Krevolin, Horst');
+  const html = renderPrep({ subject: 'Intro', start: { dateTime: '2026-10-28T12:00:00.0000000' } }, p);
+  assert.match(html, /12:00 CT/);
+  assert.match(html, /Questions to ask/);
+  assert.equal(parsePrep('nothing'), null);
+});
+
+test('brief renders every section without em dashes', async () => {
+  const { renderBrief } = await import('../services/danielBrief.js');
+  const html = renderBrief({
+    opener: 'Two meetings Wednesday.', due: [{ who: 'jonathan', what: 'Check invite', subject: 'Krevolin', overdue: false }],
+    replies: [{ sentiment: 'meeting_request', company: 'Acme', first_name: 'A', last_name: 'B', agent: 'Kayla Pierce', said: 'Tuesday works' }],
+    approvals: [{ company: 'Provident Title', new_name: 'Scott Hernandez', new_title: 'CFO' }],
+    meetings: { ok: true, events: [{ subject: 'Krevolin', start: { dateTime: '2026-10-28T12:00:00' }, attendees: [{ emailAddress: { address: 'ben@khlawfirm.com' } }] }] },
+    done: [{ topic: 'Memphis Health Center', note: 'Cadence stopped.' }],
+    health: [{ level: 'note', text: 'Kate is idle.' }], team: [['Kayla Pierce', '175 sent.']],
+    triage: null, ahead: ['Budgets lock by mid-November.'],
+  });
+  for (const s of ['Needs you (3)', 'Meetings, next 3 business days', 'Done for you', 'Health check', 'Sending, reply sorting and the API are working', 'Looking ahead', 'Provident Title']) assert.ok(html.includes(s), s);
+  assert.ok(!/[—–]/.test(html));
+});

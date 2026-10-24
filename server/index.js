@@ -34,6 +34,9 @@ import { startScheduler } from './services/scheduler.js';
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Railway sits one proxy in front of us.  Without this the rate limiter sees every visitor as the
+// same address (and logs ERR_ERL_UNEXPECTED_X_FORWARDED_FOR on every restart).
+app.set('trust proxy', 1);
 app.use(helmet());
 app.use(cors());
 app.use(express.json());
