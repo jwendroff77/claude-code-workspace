@@ -178,7 +178,7 @@ test('meeting prep parsing', async () => {
 test('brief renders every section without em dashes', async () => {
   const { renderBrief } = await import('../services/danielBrief.js');
   const html = renderBrief({
-    opener: 'Two meetings Wednesday.', due: [{ who: 'jonathan', what: 'Check invite', subject: 'Krevolin', overdue: false }],
+    opener: 'Two meetings Wednesday.', due: [{ who: 'jonathan', what: 'Check invite', subject: 'Krevolin', due: '2026-10-28', overdue: false }],
     replies: [{ sentiment: 'meeting_request', company: 'Acme', first_name: 'A', last_name: 'B', agent: 'Kayla Pierce', said: 'Tuesday works' }],
     approvals: [{ company: 'Provident Title', new_name: 'Scott Hernandez', new_title: 'CFO' }],
     meetings: { ok: true, events: [{ subject: 'Krevolin', start: { dateTime: '2026-10-28T12:00:00' }, attendees: [{ emailAddress: { address: 'ben@khlawfirm.com' } }] }] },
@@ -186,6 +186,21 @@ test('brief renders every section without em dashes', async () => {
     health: [{ level: 'note', text: 'Kate is idle.' }], team: [['Kayla Pierce', '175 sent.']],
     triage: null, ahead: ['Budgets lock by mid-November.'],
   });
-  for (const s of ['Needs you (3)', 'Meetings, next 3 business days', 'Done for you', 'Health check', 'Sending, reply sorting and the API are working', 'Looking ahead', 'Provident Title']) assert.ok(html.includes(s), s);
+  for (const s of ['Needs you this week (3)', 'Meetings this week', 'Done last week', 'Health check', 'Sending, reply sorting and the API are working', 'Looking ahead', 'Provident Title']) assert.ok(html.includes(s), s);
   assert.ok(!/[—–]/.test(html));
+});
+
+test('weekly brief: Friday of the week, due through Friday, free weekday reminders', async () => {
+  const { fridayOf, reminderText } = await import('../services/danielBrief.js');
+  assert.equal(fridayOf('2026-10-26'), '2026-10-30');
+  assert.equal(fridayOf('2026-10-30'), '2026-10-30');
+  const plan = steps => JSON.stringify({ summary: 's', owner: 'daniel', steps });
+  const rows = [{ id: 1, conversation_id: 'A', subject: 'BGE', status: 'planned', plan_json: plan([{ who: 'jonathan', what: 'ACC check', due: '2026-10-28' }]) }];
+  assert.equal(dueItems(rows, '2026-10-26').length, 0);                 // not due Monday
+  assert.equal(dueItems(rows, '2026-10-26', '2026-10-30').length, 1);   // but in this week's brief
+  assert.equal(dueItems(rows, '2026-10-26', '2026-10-30')[0].overdue, false);
+  assert.equal(reminderText([], []), null);                              // quiet day, no message
+  const text = reminderText(dueItems(rows, '2026-10-28'), [{ summary: 'Switch Provident Title' }]);
+  assert.ok(text.includes('- Jonathan: ACC check'));
+  assert.ok(text.includes('- Waiting for your OK: Switch Provident Title'));
 });

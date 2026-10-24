@@ -637,8 +637,8 @@ export function startScheduler() {
     }
   }, { timezone: 'America/Chicago' });
 
-  // Daniel's morning brief (Central time, weekdays 8:00am): needs you, meetings, health, team, looking ahead.
-  cron.schedule('0 8 * * 1-5', async () => {
+  // Daniel's weekly brief (Central time, Mondays 8:00am): the week ahead, last week, health, looking ahead.
+  cron.schedule('0 8 * * 1', async () => {
     if (process.env.DANIEL_INBOX_ENABLED !== 'true') return;
     try {
       const { sendBrief } = await import('./danielBrief.js');
@@ -649,6 +649,17 @@ export function startScheduler() {
         const { sendDueList } = await import('./daniel.js');
         await sendDueList();
       } catch (e2) { console.error('[Scheduler] Daniel 8am list error:', e2.message); }
+    }
+  }, { timezone: 'America/Chicago' });
+
+  // Tuesday to Friday 8:00am CT: a one-line Teams reminder, only when something is due (no AI, free).
+  cron.schedule('0 8 * * 2-5', async () => {
+    if (process.env.DANIEL_INBOX_ENABLED !== 'true') return;
+    try {
+      const { sendDailyReminders } = await import('./danielBrief.js');
+      await sendDailyReminders();
+    } catch (err) {
+      console.error('[Scheduler] Daniel daily reminder error:', err.message);
     }
   }, { timezone: 'America/Chicago' });
 

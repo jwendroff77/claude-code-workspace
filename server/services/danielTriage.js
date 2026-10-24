@@ -179,13 +179,14 @@ export async function checkJonathanInbox() {
 }
 
 // For the 8:00am list: business email from the last day that needs someone.
-export async function triageForList() {
-  if (TRIAGE_MODE() === 'off') return { mode: 'off', total: 0, items: [] };
+export async function triageForList(days = 7) {
+  if (TRIAGE_MODE() === 'off') return { mode: 'off', total: 0, items: [], days };
   await ensureTable();
-  const [[t]] = await pool.execute(`SELECT COUNT(*) n FROM daniel_triage WHERE created_at >= NOW() - INTERVAL 1 DAY AND category IS NOT NULL AND category<>'team'`);
+  const d = Math.max(1, Math.min(31, parseInt(days, 10) || 7));
+  const [[t]] = await pool.execute(`SELECT COUNT(*) n FROM daniel_triage WHERE created_at >= NOW() - INTERVAL ${d} DAY AND category IS NOT NULL AND category<>'team'`);
   const [items] = await pool.execute(
     `SELECT from_email, subject, owner, urgency, why, status FROM daniel_triage
-     WHERE created_at >= NOW() - INTERVAL 1 DAY AND category='business' AND needs_action=1
-     ORDER BY FIELD(urgency,'today','this_week','fyi'), received_at`);
-  return { mode: TRIAGE_MODE(), total: t.n, items };
+     WHERE created_at >= NOW() - INTERVAL ${d} DAY AND category='business' AND needs_action=1
+     ORDER BY FIELD(urgency,'today','this_week','fyi'), received_at LIMIT 15`);
+  return { mode: TRIAGE_MODE(), total: t.n, items, days: d };
 }

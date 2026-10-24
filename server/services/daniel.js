@@ -249,12 +249,12 @@ Plan:
 - If an email should go outside the company, write the draft from the right person (jenna for carrier install/billing issues, hannah for commissions and TSD statements, daniel for anything else).  Drafts are only sent after Jonathan says yes.
 - Draft style: direct but human.  Warm one-line opener, then "Here's what we need:" if there is an ask, then thanks.  Team mailboxes (support@, billing@) get "Hello,".  Short.  No em dashes.  Two spaces after each sentence.  Prices always include the 5-IP /29 block as one total.
 - Things the sender clearly asked for (stop emailing me, check back in Q1) are just done, not questions.  Ask Jonathan only real judgment calls, and keep it to what you truly need.
-- Reminders: when Jonathan asks to be reminded, add a step for jonathan with that due date.  Every open step shows up in his 8:00am list on its due date and stays there until he replies "done".  Say "It will be on your 8:00am list Monday" (with the real day), never promise anything else.
+- Reminders: when Jonathan asks to be reminded, add a step for jonathan with that due date.  On its due date he gets an 8:00am reminder in Teams (and Monday's weekly brief lists the whole week), and it stays until he replies "done".  Say "You'll get a reminder Wednesday morning" (with the real day), never promise anything else.
 - You can email (through drafts Jonathan approves), look things up, read Jonathan's Outlook calendar (get_calendar) and remember.  You cannot make phone calls, join meetings or send anything on your own, so steps that need a call go to jonathan.
 - You can act in the sales platform with platform_action: stop a cadence, mark a meeting booked, mark a reply handled, approve or skip a contact switch, switch to a named successor, pause or resume a rep.  Find the ids first with lookup_company, list_replies_waiting, list_contact_switches or list_reps.  Some actions run right away and some wait for Jonathan's OK; the tool result tells you which, and your summary must say so honestly ("done" only when it says Done).
 - When a prospect clearly asked for something (stop, check back later) or a meeting is confirmed, just do the matching action.  Propose contact switches and rep changes; they wait for his OK.
 - You cannot change the portal yet (deals, Cases, Tasks, Forecast).  Tell him where to do those.
-- Jonathan gets your morning brief at 8:00am on weekdays (open steps due that day, replies waiting on him, meetings, health check, looking ahead) and meeting prep 2 business days before outside meetings.  Do not promise any other report.
+- Jonathan gets your weekly brief Monday at 8:00am (the week's due steps, replies waiting on him, meetings, health check, looking ahead), a one-line Teams reminder Tuesday to Friday only on days something is due, and meeting prep 2 business days before outside meetings.  Do not promise any other report.
 - Never draft an email to Jonathan or to the team.  Anything you need from Jonathan goes in questions.
 - Never invent facts, account numbers, prices or dates.  Use only what the email, your tools or your notes show.
 
@@ -530,7 +530,8 @@ export function todayISO(now = new Date()) {
 }
 
 // rows: daniel_requests rows with plan_json.  Uses the newest plan per thread and skips threads marked done.
-export function dueItems(rows, today) {
+// until: include steps due up to this date (the weekly brief passes Friday).  Overdue is judged against today.
+export function dueItems(rows, today, until = today) {
   const done = new Set(rows.filter(r => r.status === 'done').map(r => r.conversation_id));
   const latest = new Map();
   for (const r of rows) {
@@ -543,7 +544,7 @@ export function dueItems(rows, today) {
     if (!OPEN.includes(r.status)) continue;
     let plan; try { plan = JSON.parse(r.plan_json); } catch { continue; }
     for (const st of plan.steps || []) {
-      if (st.due && st.due <= today) items.push({ subject: r.subject || '(no subject)', who: st.who, what: st.what, due: st.due, overdue: st.due < today });
+      if (st.due && st.due <= until) items.push({ subject: r.subject || '(no subject)', who: st.who, what: st.what, due: st.due, overdue: st.due < today });
     }
   }
   return items.sort((a, b) => a.due.localeCompare(b.due));
@@ -552,8 +553,8 @@ export function dueItems(rows, today) {
 export function renderTriage(tri) {
   if (!tri || tri.mode === 'off' || !tri.total) return '';
   const head = tri.mode === 'watch'
-    ? `<b>Your inbox, last 24 hours</b> (watch-only, I did nothing): ${tri.total} emails, ${tri.items.length} need someone.`
-    : `<b>Your inbox, last 24 hours:</b> ${tri.total} emails, ${tri.items.length} need someone.  I emailed you a plan for each.`;
+    ? `<b>Your inbox, last ${tri.days === 1 || !tri.days ? "24 hours" : tri.days + " days"}</b> (watch-only, I did nothing): ${tri.total} emails, ${tri.items.length} need someone.`
+    : `<b>Your inbox, last ${tri.days === 1 || !tri.days ? "24 hours" : tri.days + " days"}:</b> ${tri.total} emails, ${tri.items.length} need someone.  I emailed you a plan for each.`;
   const line = i => `- ${esc(nameOf(i.owner))}${i.urgency === 'today' ? ' <b>(today)</b>' : ''}: ${esc(i.subject || '(no subject)')}  <span style="color:#64748b">(${esc(i.from_email || '')}${i.why ? '.  ' + esc(i.why) : ''})</span>`;
   return head + (tri.items.length ? '<br><br>' + tri.items.map(line).join('<br>') : '');
 }
