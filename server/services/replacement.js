@@ -8,7 +8,7 @@ import { sendMail } from './graph.js';
 import { extractReplacement } from './ai.js';
 
 const OWNER_ALERT_EMAIL = 'jonathan@1cloudcommunications.com';
-const SECRET = process.env.JWT_SECRET || 'onecloud2026';
+import { signLink, verifyLink } from './linkSecret.js';
 
 // Cheap gate before spending an AI call.  No subject-line out-of-office filter: people
 // often announce a retirement with an auto-reply (MotorWorld, 8 Oct).  The AI step
@@ -24,7 +24,12 @@ function publicBase() {
 }
 
 export function signReplacement(id) {
-  return crypto.createHmac('sha256', SECRET).update(`replacement:${id}`).digest('hex').slice(0, 24);
+  return signLink(`replacement:${id}`, 24);
+}
+
+// Accepts the current link secret and any old one, so Approve/Skip links already emailed keep working.
+export function verifyReplacement(id, sig) {
+  return verifyLink(`replacement:${id}`, sig, 24);
 }
 
 let tableReady = false;

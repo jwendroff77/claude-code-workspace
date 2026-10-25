@@ -3,7 +3,7 @@
 import { Router } from 'express';
 import crypto from 'crypto';
 import pool from '../db/connection.js';
-import { signReplacement, ensureReplacementTable } from '../services/replacement.js';
+import { verifyReplacement, ensureReplacementTable } from '../services/replacement.js';
 
 const router = Router();
 
@@ -15,9 +15,7 @@ function page(title, body) {
 }
 
 function validSig(id, sig) {
-  const expected = signReplacement(id);
-  return typeof sig === 'string' && sig.length === expected.length &&
-    crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+  return verifyReplacement(id, sig);
 }
 
 async function load(req, res) {

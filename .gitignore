@@ -2,3 +2,9 @@ node_modules/
 dist/
 .env
 *.log
+
+# Customer data never goes in the repo (security sweep 25 Oct 2026).
+backups/
+/import_prospects.sql
+scripts/*.sql
+*.csv

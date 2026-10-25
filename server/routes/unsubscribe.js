@@ -4,12 +4,12 @@ import pool from '../db/connection.js';
 
 const router = Router();
 
-const SECRET = process.env.JWT_SECRET || 'onecloud2026';
+import { signLink, verifyLink } from '../services/linkSecret.js';
 
 // Generate a signed unsubscribe token for a prospect
 export function generateUnsubToken(prospectId, email) {
   const data = `${prospectId}:${email}`;
-  const hmac = crypto.createHmac('sha256', SECRET).update(data).digest('hex').slice(0, 16);
+  const hmac = signLink(data, 16);
   // Base64 encode the data + hmac
   return Buffer.from(`${prospectId}:${hmac}`).toString('base64url');
 }
@@ -26,9 +26,8 @@ function decodeUnsubToken(token) {
 }
 
 function verifyToken(prospectId, email, hmac) {
-  const data = `${prospectId}:${email}`;
-  const expected = crypto.createHmac('sha256', SECRET).update(data).digest('hex').slice(0, 16);
-  return hmac === expected;
+  // Accepts the current link secret and any old one, so links already emailed keep working.
+  return verifyLink(`${prospectId}:${email}`, hmac, 16);
 }
 
 // GET /unsubscribe/:token — public endpoint, no auth required
