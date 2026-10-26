@@ -53,7 +53,7 @@ router.get('/approve/:id/:sig', async (req, res) => {
     await pool.execute("UPDATE replacement_approvals SET status = 'approved', decided_at = NOW() WHERE id = ?", [row.id]);
     const name = [row.first_name, row.last_name].filter(Boolean).join(' ') || row.email;
     res.send(page('Approved', `<p><strong>${name}</strong> at ${row.company} is in the cadence.</p>
-      <p>The step 1 intro goes out in the next weekday send window (8:00am to 4:55pm CT), after NeverBounce checks the address.</p>`));
+      <p>The step 1 intro goes out in the next weekday send window (7:40am to 4:55pm CT), after NeverBounce checks the address.</p>`));
   } catch (e) {
     console.error('[Replacement] approve failed:', e.message);
     res.status(500).send(page('Something went wrong', '<p>Nothing was changed.  Please try again.</p>'));

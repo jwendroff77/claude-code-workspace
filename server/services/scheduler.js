@@ -40,12 +40,12 @@ function isInSendWindow(agent) {
   return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
 }
 
-// Partner cadence window: 8:00am-4:55pm Central, DST-aware (Intl handles CDT/CST).
+// Partner cadence window: 7:40am-4:55pm Central (Jonathan moved the start from 8:00 on 26 Oct 2026), DST-aware (Intl handles CDT/CST).
 // Replaces a fixed UTC-5 offset that would have started sends at 7am CT after DST ends.
 function inPartnerWindow() {
   const ct = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' }));
   const mins = ct.getHours() * 60 + ct.getMinutes();
-  return mins >= 8 * 60 && mins < 16 * 60 + 55;
+  return mins >= 7 * 60 + 40 && mins < 16 * 60 + 55;
 }
 
 // Get minutes remaining in send window
@@ -846,7 +846,7 @@ async function checkPartnerReplies() {
   const todayIdx = new Date().getDay();
   if (todayIdx < 1 || todayIdx > 5) return; // Mon-Fri only
 
-  if (!inPartnerWindow()) return; // 8am-4:55pm CT only
+  if (!inPartnerWindow()) return; // 7:40am-4:55pm CT only
 
   const [enrollments] = await pool.query(
     `SELECT pe.*, p.email AS prospect_email, p.first_name, p.last_name,
