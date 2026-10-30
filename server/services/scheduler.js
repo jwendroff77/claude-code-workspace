@@ -940,6 +940,7 @@ async function processPartnerCadences() {
   // with 120 the send's own few seconds of latency pushed every gap to 3:00.
   // Jonathan set 2 min gaps on 2026-10-07 (was 3-5).  No pre-send sleep.
   const gapSec = 110;
+  const KAYLA_GAP_SEC = 50; // Kayla Pierce (agent 9) only: 1-minute gaps (next tick qualifies) - Jonathan 2026-10-30
 
   // "Today" in Central time, measured on the DB clock.  The Railway MySQL clock runs
   // ~5h ahead, so DATE(sent_at) = CURDATE() rolled the day over at ~2pm CT.  Counting
@@ -1029,7 +1030,7 @@ async function processPartnerCadences() {
      AND NOT EXISTS (
        SELECT 1 FROM sent_emails se_gap
        WHERE se_gap.agent_id = pe.agent_id
-         AND se_gap.sent_at > NOW() - INTERVAL ${gapSec} SECOND
+         AND se_gap.sent_at > NOW() - INTERVAL IF(pe.agent_id = 9, ${KAYLA_GAP_SEC}, ${gapSec}) SECOND
      )
      AND NOT EXISTS (
        SELECT 1 FROM sent_emails se
