@@ -626,9 +626,14 @@ export function startScheduler() {
     }
   });
 
+  // Daniel's daily Teams/Outlook sends (meeting prep, Tue-Fri reminder, alarms) are PAUSED
+  // (Jonathan, 3 Nov 2026: Mondays only, until further notice).  DANIEL_DAILY_ENABLED=true turns them back on.
+  const danielDailyOn = () => process.env.DANIEL_DAILY_ENABLED === 'true';
+
   // Daniel's meeting prep, 2 business days ahead (Central time, weekdays 7:30am).
   cron.schedule('30 7 * * 1-5', async () => {
     if (process.env.DANIEL_INBOX_ENABLED !== 'true') return;
+    if (!danielDailyOn()) return;
     try {
       const { prepUpcomingMeetings } = await import('./danielMeetings.js');
       await prepUpcomingMeetings();
@@ -655,6 +660,7 @@ export function startScheduler() {
   // Tuesday to Friday 8:00am CT: a one-line Teams reminder, only when something is due (no AI, free).
   cron.schedule('0 8 * * 2-5', async () => {
     if (process.env.DANIEL_INBOX_ENABLED !== 'true') return;
+    if (!danielDailyOn()) return;
     try {
       const { sendDailyReminders } = await import('./danielBrief.js');
       await sendDailyReminders();
@@ -666,6 +672,7 @@ export function startScheduler() {
   // Daniel's alarms: every 15 minutes, weekdays 7am-6pm CT (checks itself), each alarm at most every 6 hours.
   cron.schedule('*/15 * * * *', async () => {
     if (process.env.DANIEL_INBOX_ENABLED !== 'true') return;
+    if (!danielDailyOn()) return;
     try {
       const { checkAndAlert } = await import('./danielHealth.js');
       await checkAndAlert();
