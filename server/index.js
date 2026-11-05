@@ -30,6 +30,7 @@ import taskRoutes from './routes/tasks.js';
 import signalIntelRoutes from './routes/signalIntel.js';
 import teamsRoutes from './routes/teams.js';
 import { startScheduler } from './services/scheduler.js';
+import { ENGINE_RUNS_TABLE } from './services/kaylaStep4.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -105,6 +106,8 @@ async function runSchemaPatches() {
     "ALTER TABLE prospects ADD COLUMN won_deals INT DEFAULT NULL",
     // When Apollo was asked for this lead's email (1 credit), so it is never asked twice.
     "ALTER TABLE signal_intel_leads ADD COLUMN email_lookup_at DATETIME DEFAULT NULL",
+    // Released engine runs (Kayla step 4) + their heartbeat for the stall watchdog.
+    ENGINE_RUNS_TABLE,
   ];
   const { default: pool } = await import('./db/connection.js');
   for (const sql of patches) {

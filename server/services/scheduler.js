@@ -8,6 +8,7 @@ import { createLinkedInTask } from '../routes/tasks.js';
 import { recalculateAllScores } from './scoring.js';
 import { checkDomainHealth } from './domain.js';
 import { countBusinessDays, pickFirstDuePerAgent } from './partnerCadenceDue.js';
+import { runKaylaStep4Tick, runEngineWatchdog, PARTNER_DAILY_CAP, KAYLA_DAILY_CAP } from './kaylaStep4.js';
 
 // Only NeverBounce's own results count as checked.  Anything else (empty, or a label
 // copied in from a list such as Apollo's "verified") gets a real check before step 1.
@@ -762,6 +763,25 @@ export function startScheduler() {
     }
   });
 
+  // Kayla step 4 (reply-all on Steven's step 3) — every minute, only while Jonathan has
+  // released a run for today (engine_runs).  Moved off the laptop 5 Nov 2026.
+  cron.schedule('* * * * *', async () => {
+    try {
+      await runKaylaStep4Tick();
+    } catch (err) {
+      console.error('[KaylaStep4] Tick error:', err.message);
+    }
+  });
+
+  // Stall watchdog — every 5 minutes: emails Jonathan if released sends go quiet
+  cron.schedule('*/5 * * * *', async () => {
+    try {
+      await runEngineWatchdog();
+    } catch (err) {
+      console.error('[Watchdog] Error:', err.message);
+    }
+  });
+
   // Hot prospect alerts — every 30 minutes
   cron.schedule('*/30 * * * *', async () => {
     try {
@@ -954,8 +974,7 @@ async function processPartnerCadences() {
   // back the real minutes since CT midnight from the DB's NOW() is offset-proof.
   const ctNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' }));
   const minsSinceCtMidnight = ctNow.getHours() * 60 + ctNow.getMinutes();
-  const DAILY_CAP = 125; // Jonathan raised from 100 on 2026-10-07
-  const KAYLA_DAILY_CAP = 175; // Kayla Pierce (agent 9) only - Jonathan 2026-10-22
+  const DAILY_CAP = PARTNER_DAILY_CAP; // caps live in kaylaStep4.js so the watchdog uses the same numbers
 
   // A cross-agent "minimum gap since the last send from ANYONE" guard used to
   // live here. Removed 2026-09-03: it made Lauren wait on Megan's pace even

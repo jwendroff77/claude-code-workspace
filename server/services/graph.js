@@ -100,6 +100,57 @@ export async function replyToMessage({ fromEmail, messageId, html, text }) {
   return { messageId };
 }
 
+// Reply-all as a draft first, so a BCC can be added (canary), then send it.  Retries the
+// send up to 3 times; on failure the draft is left in Drafts and this throws.
+export async function replyAllWithBcc({ fromEmail, messageId, html, bcc }) {
+  const client = getClient();
+  const draft = await client.api(`/users/${fromEmail}/messages/${messageId}/createReplyAll`).post({ comment: html });
+  if (bcc) {
+    await client.api(`/users/${fromEmail}/messages/${draft.id}`).patch({ bccRecipients: [{ emailAddress: { address: bcc } }] });
+  }
+  let lastErr;
+  for (let a = 1; a <= 3; a++) {
+    try {
+      await client.api(`/users/${fromEmail}/messages/${draft.id}/send`).post({});
+      return { draftId: draft.id };
+    } catch (err) {
+      lastErr = err;
+      await new Promise(r => setTimeout(r, 5000 * a));
+    }
+  }
+  throw new Error(`send failed after 3 tries (draft left in Drafts): ${lastErr?.message}`);
+}
+
+// Every message in a conversation, all folders, oldest first.
+export async function getThreadMessages({ email, conversationId }) {
+  const client = getClient();
+  const out = [];
+  let res = await client
+    .api(`/users/${email}/messages`)
+    .filter(`conversationId eq '${conversationId}'`)
+    .select('id,receivedDateTime,from,subject,bodyPreview,toRecipients,ccRecipients')
+    .top(50)
+    .get();
+  out.push(...(res.value || []));
+  while (res['@odata.nextLink']) {
+    res = await client.api(res['@odata.nextLink']).get();
+    out.push(...(res.value || []));
+  }
+  return out.sort((a, b) => a.receivedDateTime.localeCompare(b.receivedDateTime));
+}
+
+// Most recent messages in an agent's Sent Items (canary check).
+export async function getRecentSent({ email, top = 3 }) {
+  const client = getClient();
+  const res = await client
+    .api(`/users/${email}/mailFolders/SentItems/messages`)
+    .select('subject,toRecipients,ccRecipients,bccRecipients,sentDateTime')
+    .top(top)
+    .orderby('sentDateTime desc')
+    .get();
+  return res.value || [];
+}
+
 // Check an agent's INBOX for replies from a specific sender on a conversation thread
 // Used to detect partner reply-all (since partner is external, we check agent's inbox instead)
 export async function getInboxByConversation({ email, conversationId, fromEmail }) {
