@@ -227,9 +227,12 @@ export async function runEngineWatchdog() {
   const mins = minsSinceCtMidnight();
   if (mins < 7 * 60 + 55) return; // let the window open before judging
 
-  // 1. Kayla step 4 run
+  // 1. Kayla step 4 run.  "No send" means Kayla has sent nothing of any kind: step 4s wait their turn
+  // while step 1s are going out (shared gap), and that is healthy, not a stall (false alarm 9 Nov 2026).
   const [runs] = await pool.query(
-    `SELECT *, TIMESTAMPDIFF(MINUTE, heartbeat_at, NOW()) hb_age, TIMESTAMPDIFF(MINUTE, COALESCE(last_send_at, created_at), NOW()) send_age,
+    `SELECT *, TIMESTAMPDIFF(MINUTE, heartbeat_at, NOW()) hb_age,
+            TIMESTAMPDIFF(MINUTE, GREATEST(COALESCE(last_send_at, created_at), created_at,
+              COALESCE((SELECT MAX(sent_at) FROM sent_emails WHERE agent_id = ${KAYLA_ID}), created_at)), NOW()) send_age,
             TIMESTAMPDIFF(MINUTE, alerted_at, NOW()) alert_age
      FROM engine_runs WHERE job = ? AND run_date = ? AND status IN ('canary', 'active')`,
     [JOB, ctDate()]
