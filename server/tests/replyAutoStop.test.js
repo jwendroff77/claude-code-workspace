@@ -1,7 +1,7 @@
 // Run: node --test server/tests/replyAutoStop.test.js   (fake database, nothing real is touched)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { autoStopOnReply } from '../services/replyAutoStop.js';
+import { autoStopOnReply, isComcastTrouble, asksForPricing, replyOnly } from '../services/replyAutoStop.js';
 
 function fakeDb({ status = 'in_sequence', excluded = false, live = 1 } = {}) {
   const log = [];
@@ -12,6 +12,8 @@ function fakeDb({ status = 'in_sequence', excluded = false, live = 1 } = {}) {
       log.push(s);
       if (/FROM prospects WHERE id=/.test(s)) return [[{ id: args[0], email: 'pat@acme.com', company: 'Acme', status }]];
       if (/SELECT id FROM exclusion_list/.test(s)) return [excluded ? [{ id: 1 }] : []];
+      if (/FROM agents WHERE/.test(s)) return [/@(comcast|1cloudnow)\.com$/i.test(args[0]) ? [{ id: 9 }] : []];
+      if (/SELECT id FROM tasks/.test(s)) return [[]];
       if (/^UPDATE partner_enrollments/.test(s)) return [{ affectedRows: live }];
       return [{ affectedRows: 1, insertId: 1 }];
     },
@@ -83,4 +85,55 @@ test('no prospect, nothing happens', async () => {
   const db = fakeDb();
   assert.equal(await autoStopOnReply(db, { prospectId: null, sentiment: 'negative' }), null);
   assert.equal(db.log.length, 0);
+});
+
+// ---- 10 Nov 2026 additions (real 9 Nov replies) ----
+
+test('a no to Comcast, not to 1Cloud (Etna Supply): Engaged, left in inbox, never Do Not Contact', async () => {
+  const db = fakeDb();
+  const text = 'Steven We use granite as our aggregator. We just had to many issues with comcast direct billing.';
+  const r = await autoStopOnReply(db, { prospectId: 5, receivedEmailId: 77, sentiment: 'negative', text, senderEmail: 'pat@acme.com' });
+  assert.match(r, /not a Comcast fit/);
+  assert.ok(has(db, /UPDATE partner_enrollments SET status='cancelled'/));
+  assert.ok(has(db, /SET status='engaged'/));
+  assert.ok(!has(db, /exclusion_list|unsubscribed|actioned=1/));
+});
+
+test('Comcast trouble + "remove me" is still a removal', async () => {
+  const db = fakeDb();
+  const r = await autoStopOnReply(db, { prospectId: 5, sentiment: 'negative', text: 'Too many issues with Comcast. Please remove me.' });
+  assert.match(r, /Do Not Contact/);
+});
+
+test('a plain no that only mentions Comcast (Action Gypsum) is still Do Not Contact', async () => {
+  assert.equal(isComcastTrouble('No thank you, we already are partnered with a third party through comcast.'), false);
+});
+
+test('"send those over" pricing ask (Brennan): Engaged, not Do Not Contact', async () => {
+  const db = fakeDb();
+  const r = await autoStopOnReply(db, { prospectId: 5, sentiment: 'negative', text: 'I am only looking for price decreases. LOL so send those over' });
+  assert.match(r, /asked for pricing/);
+  assert.ok(!has(db, /exclusion_list|unsubscribed/));
+  assert.equal(asksForPricing('No interest. Thanks'), false);
+});
+
+test('not now: cadence stopped, Engaged, 90-day check-back task', async () => {
+  const db = fakeDb();
+  const r = await autoStopOnReply(db, { prospectId: 5, agentId: 9, receivedEmailId: 77, sentiment: 'not_now', text: 'We just re-negotiated for 36 months.' });
+  assert.match(r, /check back in 90 days/);
+  assert.ok(has(db, /INSERT INTO tasks .*INTERVAL 90 DAY/));
+});
+
+for (const sender of ['steven_filek@comcast.com', 'kpierce@1cloudnow.com']) {
+  test(`mail from our side (${sender}) is never acted on`, async () => {
+    const db = fakeDb();
+    assert.equal(await autoStopOnReply(db, { prospectId: 5, sentiment: 'positive', senderEmail: sender }), null);
+    assert.ok(!db.log.some(s => /^(UPDATE|INSERT)/.test(s)));
+  });
+}
+
+test('replyOnly keeps their words and drops our quoted email', () => {
+  const html = '<div>No thanks.</div><hr><b>From:</b> Filek, Steven &lt;steven_filek@comcast.com&gt; Comcast Business has had billing issues...';
+  assert.equal(replyOnly(html), 'No thanks.');
+  assert.equal(replyOnly('All set. On Mon, Nov 9, 2026 at 9:00 AM Steven wrote: comcast issues'), 'All set.');
 });

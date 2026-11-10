@@ -189,8 +189,9 @@ export async function checkNewEmails(agent) {
             // Said no / not now / wants a meeting: stop the cadence now, not at the next
             // funnel review (Jonathan 5 Nov 2026).
             try {
-              const { autoStopOnReply } = await import('./replyAutoStop.js');
-              const done = await autoStopOnReply(pool, { prospectId, agentId: agent.id, receivedEmailId: result.insertId, sentiment });
+              const { autoStopOnReply, replyOnly } = await import('./replyAutoStop.js');
+              const text = replyOnly(msg.body?.content || bodyText || '');
+              const done = await autoStopOnReply(pool, { prospectId, agentId: agent.id, receivedEmailId: result.insertId, sentiment, text, senderEmail: fromEmail });
               if (done) console.log(`[AutoStop] ${agent.name}: ${fromEmail} (${sentiment}) - ${done}`);
             } catch (e) {
               console.error(`[AutoStop] failed for ${fromEmail}: ${e.message}`);
