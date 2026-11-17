@@ -30,9 +30,29 @@ function verifyToken(prospectId, email, hmac) {
   return verifyLink(`${prospectId}:${email}`, hmac, 16);
 }
 
-// GET /unsubscribe/:token — public endpoint, no auth required
-// Shows a simple confirmation page and processes the unsubscribe
+// GET /unsubscribe/:token — public endpoint, no auth required.
+// Only shows a confirm button.  Company mail scanners (Safe Links, Mimecast) open every link in
+// an email, so a GET that unsubscribes would remove prospects who never clicked (17 Nov 2026).
 router.get('/:token', async (req, res) => {
+  try {
+    const parsed = decodeUnsubToken(req.params.token);
+    if (!parsed) return res.status(400).send(unsubPage('Invalid Link', 'This unsubscribe link is not valid.', false));
+    const [prospects] = await pool.execute('SELECT id, email, status FROM prospects WHERE id = ?', [parsed.prospectId]);
+    if (!prospects.length || !verifyToken(parsed.prospectId, prospects[0].email, parsed.hmac)) {
+      return res.status(400).send(unsubPage('Invalid Link', 'This unsubscribe link is not valid.', false));
+    }
+    if (prospects[0].status === 'unsubscribed') {
+      return res.send(unsubPage('Already Unsubscribed', `${prospects[0].email} has already been removed from our mailing list.`, true));
+    }
+    return res.send(confirmPage(req.params.token, prospects[0].email));
+  } catch (err) {
+    console.error('[Unsubscribe] Error:', err.message);
+    return res.status(500).send(unsubPage('Error', 'Something went wrong.  Please contact us directly to unsubscribe.', false));
+  }
+});
+
+// POST /unsubscribe/:token — the confirm button.  Processes the unsubscribe.
+router.post('/:token', async (req, res) => {
   try {
     const parsed = decodeUnsubToken(req.params.token);
     if (!parsed) {
@@ -73,7 +93,7 @@ router.get('/:token', async (req, res) => {
     // Cancel any partner enrollments
     await pool.execute(
       `UPDATE partner_enrollments SET status = 'cancelled'
-       WHERE prospect_id = ? AND status IN ('active', 'waiting_partner')`,
+       WHERE prospect_id = ? AND status IN ('active', 'waiting_partner', 'paused')`,
       [parsed.prospectId]
     );
 
@@ -103,8 +123,20 @@ router.get('/:token', async (req, res) => {
   }
 });
 
+function escHtml(v) {
+  return String(v || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// Confirm step: one button, posts back to the same link
+function confirmPage(token, email) {
+  return unsubPage('Unsubscribe', `Stop all emails from 1Cloud Communications to ${escHtml(email)}?`, null,
+    `<form method="POST" action="${escHtml(token)}" style="margin-top:24px;">
+      <button type="submit" style="background:#1B3A4B;color:#fff;border:0;border-radius:6px;padding:12px 28px;font-size:16px;cursor:pointer;">Unsubscribe</button>
+    </form>`);
+}
+
 // Simple HTML page for unsubscribe confirmation
-function unsubPage(title, message, success) {
+function unsubPage(title, message, success, extra = '') {
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -114,7 +146,7 @@ function unsubPage(title, message, success) {
   <style>
     body { font-family: Arial, sans-serif; background: #f5f5f5; margin: 0; padding: 40px 20px; }
     .container { max-width: 480px; margin: 0 auto; background: white; border-radius: 8px; padding: 40px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); text-align: center; }
-    h1 { color: ${success ? '#1B3A4B' : '#c0392b'}; font-size: 24px; margin-bottom: 16px; }
+    h1 { color: ${success === false ? '#c0392b' : '#1B3A4B'}; font-size: 24px; margin-bottom: 16px; }
     p { color: #555; font-size: 16px; line-height: 1.5; }
     .logo { font-size: 20px; font-weight: bold; color: #1B3A4B; margin-bottom: 24px; }
     .check { font-size: 48px; margin-bottom: 16px; }
@@ -123,9 +155,10 @@ function unsubPage(title, message, success) {
 <body>
   <div class="container">
     <div class="logo">1Cloud Communications</div>
-    <div class="check">${success ? '&#10003;' : '&#10007;'}</div>
+    ${success === null ? '' : `<div class="check">${success ? '&#10003;' : '&#10007;'}</div>`}
     <h1>${title}</h1>
     <p>${message}</p>
+    ${extra}
   </div>
 </body>
 </html>`;

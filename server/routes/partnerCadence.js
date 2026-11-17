@@ -265,6 +265,7 @@ router.put('/enrollments/:id/cancel', async (req, res) => {
 // Manual control only. Returns the email details so you can review before sending the next.
 import { sendMail, getLastSentTo, replyToMessage } from '../services/graph.js';
 import { generatePersonalizedOpener } from '../services/ai.js';
+import { withOptOut } from '../services/optOut.js';
 
 router.post('/send-next', async (req, res) => {
   const { bcc } = req.body || {};
@@ -338,6 +339,7 @@ router.post('/send-next', async (req, res) => {
       .replace(/\{\{company\}\}/g, e.company || '')
       .replace(/\{\{email\}\}/g, e.email || '')
       .replace(/\{\{[^}]+\}\}/g, ''); // SAFETY: strip anything left
+    body = withOptOut(body, e.prospect_id, e.email);
 
     let subject = (steps[0].subject_line || 'Connecting you with {{company}}')
       .replace(/\{\{company\}\}/g, e.company || '')
@@ -454,11 +456,11 @@ router.post('/flush-followups', async (req, res) => {
         const fromEmail = e.agent_smtp_user || e.agent_email;
 
         // Replace merge tags
-        const body = (e.step_body || '')
+        const body = withOptOut((e.step_body || '')
           .replace(/\{\{firstName\}\}/g, e.first_name || '')
           .replace(/\{\{lastName\}\}/g, e.last_name || '')
           .replace(/\{\{company\}\}/g, e.company || '')
-          .replace(/\{\{[^}]+\}\}/g, '');
+          .replace(/\{\{[^}]+\}\}/g, ''), e.prospect_id, e.prospect_email);
 
         // Send in-thread if we have a message ID, otherwise standalone CC'ing partner
         let sendMethod = 'standalone';

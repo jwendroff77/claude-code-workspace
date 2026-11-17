@@ -9,6 +9,7 @@ import { recalculateAllScores } from './scoring.js';
 import { checkDomainHealth } from './domain.js';
 import { countBusinessDays, pickFirstDuePerAgent } from './partnerCadenceDue.js';
 import { runKaylaStep4Tick, runEngineWatchdog, PARTNER_DAILY_CAP, KAYLA_DAILY_CAP } from './kaylaStep4.js';
+import { withOptOut } from './optOut.js';
 
 // Only NeverBounce's own results count as checked.  Anything else (empty, or a label
 // copied in from a list such as Apollo's "verified") gets a real check before step 1.
@@ -1174,6 +1175,7 @@ async function processPartnerCadences() {
         let body = step.body_html || '';
         body = body.replace(/\{\{aiOpener\}\}/g, aiOpener);
         body = personalizeContent(body, enrollment);
+        body = withOptOut(body, enrollment.prospect_id, enrollment.prospect_email); // "Not a fit? Unsubscribe here" (17 Nov 2026)
         const subject = personalizeContent(step.subject_line, enrollment);
 
 
@@ -1283,7 +1285,7 @@ async function processPartnerCadences() {
 
       // ---- STEP TYPE: agent_followup (Steps 3-6) ----
       else if (step.step_type === 'agent_followup' && enrollment.status === 'active') {
-        const body = personalizeContent(step.body_html, enrollment);
+        const body = withOptOut(personalizeContent(step.body_html, enrollment), enrollment.prospect_id, enrollment.prospect_email);
         const fromEmail = enrollment.agent_smtp_user || enrollment.agent_email;
 
         // REPLY-STOP (partner): once the prospect side answers, a scripted follow-up must

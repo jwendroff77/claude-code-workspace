@@ -1,5 +1,6 @@
 import pool from '../db/connection.js';
 import { sendMail, replyAllWithBcc, getThreadMessages, getRecentSent } from './graph.js';
+import { withOptOut } from './optOut.js';
 
 // Kayla step 4 on the engine (moved off Jonathan's laptop 5 Nov 2026, after a laptop sleep
 // stopped a batch for 2 hours).  Kayla replies-all on Steven's step 3 note ("Just checking back
@@ -164,7 +165,7 @@ export async function runKaylaStep4Tick() {
       return;
     }
 
-    const html = BODY.replace(/\{\{firstName\}\}/g, pick.first_name || '');
+    const html = withOptOut(BODY.replace(/\{\{firstName\}\}/g, pick.first_name || ''), pick.pid, pick.email);
     const canary = run.status === 'canary';
     await replyAllWithBcc({ fromEmail: KAYLA, messageId: pick.lastId, html, bcc: canary ? JONATHAN : null });
     await pool.execute(
@@ -280,4 +281,44 @@ export async function runEngineWatchdog() {
       `${d.name} has sent ${d.today} of ${cap} today.`,
     ]);
   }
+
+  // 3. Bounce alarm (Jonathan 17 Nov 2026: "do whatever you can to get the bounce rate down").
+  await runBounceAlarm(mins);
+}
+
+// Kayla's step 1 intros sent today vs how many of those people are now bounced.  Past the line,
+// her remaining released step 1s go back to paused (follow-ups to people who already got mail
+// keep going) and Jonathan gets one email.  Fires at most once a day: a release he makes after
+// reading the alert is his call.  17 Nov 2026 catchall-first day: 6 of 49 = 12%; normal ~1%.
+export const BOUNCE_ALARM = { minBounces: 3, maxRate: 0.03 };
+const BOUNCE_JOB = 'bounce_alarm';
+
+export async function runBounceAlarm(mins = minsSinceCtMidnight()) {
+  const [[t]] = await pool.query(
+    `SELECT COUNT(DISTINCT se.prospect_id) sent, COUNT(DISTINCT IF(p.status = 'bounced', p.id, NULL)) bounced
+     FROM sent_emails se JOIN prospects p ON p.id = se.prospect_id
+     WHERE se.agent_id = ? AND se.subject LIKE 'Introduction - %' AND se.sent_at >= NOW() - INTERVAL ${mins} MINUTE`,
+    [KAYLA_ID]
+  );
+  const sent = Number(t.sent), bounced = Number(t.bounced);
+  if (bounced < BOUNCE_ALARM.minBounces || bounced / Math.max(sent, 1) <= BOUNCE_ALARM.maxRate) return null;
+
+  const [fired] = await pool.query('SELECT id FROM engine_runs WHERE job = ? AND run_date = ?', [BOUNCE_JOB, ctDate()]);
+  if (fired.length) return null;
+  await pool.execute(
+    `INSERT INTO engine_runs (job, run_date, status, send_limit, sent, waiting_reason) VALUES (?, ?, 'fired', 0, ?, ?)`,
+    [BOUNCE_JOB, ctDate(), sent, `${bounced} of ${sent} step 1s bounced`]
+  );
+  const [u] = await pool.execute(
+    `UPDATE partner_enrollments SET status = 'paused' WHERE agent_id = ? AND status = 'active' AND current_step = 1`,
+    [KAYLA_ID]
+  );
+  const pct = Math.round((100 * bounced) / sent);
+  console.log(`[BounceAlarm] Kayla ${bounced}/${sent} step 1s bounced (${pct}%) - paused ${u.affectedRows} queued step 1s`);
+  await alert(`Platform alert: Kayla bounces at ${pct}% today, step 1s paused`, [
+    `${bounced} of the ${sent} step 1 intros Kayla sent today have bounced (${pct}%).  A normal day is about 1%.`,
+    `Her ${u.affectedRows} remaining step 1s for today are paused so her mailbox and the domain aren't hurt.  Follow-ups keep going.`,
+    `Nothing else goes out from today's list until you say so.`,
+  ]);
+  return { sent, bounced, paused: u.affectedRows };
 }
