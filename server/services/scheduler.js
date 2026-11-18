@@ -986,6 +986,7 @@ async function processPartnerCadences() {
   // back the real minutes since CT midnight from the DB's NOW() is offset-proof.
   const ctNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' }));
   const minsSinceCtMidnight = ctNow.getHours() * 60 + ctNow.getMinutes();
+  const STEP1_DAILY = 80; // 400 new step 1s a week each for Megan + Kayla (Jonathan 18 Nov 2026)
   const DAILY_CAP = PARTNER_DAILY_CAP; // caps live in kaylaStep4.js so the watchdog uses the same numbers
 
   // A cross-agent "minimum gap since the last send from ANYONE" guard used to
@@ -1077,6 +1078,14 @@ async function processPartnerCadences() {
          AND se.sent_at >= NOW() - INTERVAL ${minsSinceCtMidnight} MINUTE
      )
      AND NOT (pss_cur.step_type = 'agent_followup' AND pe.partner_replied_at IS NULL)
+     -- New step 1s: Megan (2) and Kayla (9) each send 400 a week = 80 per workday, the rest of
+     -- their day is follow-ups (Jonathan 18 Nov 2026).  Step 1 subjects all start 'Introduction'.
+     -- Starts 19 Nov (18 Nov ran ~190 for Kayla on purpose).
+     AND NOT (pss_cur.step_type = 'agent_send_cc' AND pe.agent_id IN (2, 9)
+              AND ${kaylaCtDate >= '2026-11-19' ? 1 : 0} = 1
+              AND (SELECT COUNT(*) FROM sent_emails s1
+                   WHERE s1.agent_id = pe.agent_id AND s1.subject LIKE 'Introduction%'
+                     AND s1.sent_at >= NOW() - INTERVAL ${minsSinceCtMidnight} MINUTE) >= ${STEP1_DAILY})
      ) ranked
      WHERE agent_rn <= 200
      ORDER BY partner_replied_at ASC, current_step DESC, enrolled_at ASC, agent_rn ASC`
