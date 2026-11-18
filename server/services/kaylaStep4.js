@@ -16,6 +16,7 @@ import { withOptOut } from './optOut.js';
 
 export const PARTNER_DAILY_CAP = 125; // Jonathan raised from 100 on 2026-10-07
 export const KAYLA_DAILY_CAP = 200;   // Kayla Pierce (agent 9) only - Jonathan 2026-11-04 (was 175)
+export const MEGAN_DAILY_CAP = 200;   // Megan Barrett (agent 2): 80 step 1s + follow-ups to 200 (Jonathan 18 Nov 2026)
 
 const JOB = 'kayla_step4';
 const KAYLA_ID = 9;
@@ -28,6 +29,26 @@ const DEAD = ['disqualified', 'unsubscribed', 'bounced', 'booked', 'handed_off',
 const GRAPH_CHECKS_PER_TICK = 40;
 
 const BODY = `Hi {{firstName}},<br><br>Wanted to circle back on my introduction to Steven.&nbsp; I thought it would be worthwhile for you two to connect, even if there isn't an immediate project on the table.<br><br>Comcast Business and 1Cloud can be a resource when something does come up, and having the relationship established ahead of time can make things easier.<br><br>Would a quick introduction make sense?<br><br>Thanks,<br><br>Kayla Pierce<br>Senior Enterprise Account Executive - 1Cloud Communications<br>8530 Eagle Point Blvd, Suite 100, Lake Elmo, MN<br>www.1cloudcommunications.com`;
+
+const MEGAN = 'mbarrett@1cloudnow.com';
+const JARED = 'jared_bader@comcast.com';
+const MEGAN_BODY = `Hi {{firstName}},<br><br>Wanted to circle back on my introduction to Jared.&nbsp; I thought it would be worthwhile for you two to connect, even if there isn't an immediate project on the table.<br><br>Comcast Business and 1Cloud can be a resource when something does come up, and having the relationship established ahead of time can make things easier.<br><br>Would a quick introduction make sense?<br><br>Thanks,<br><br>Megan Barrett<br>Senior Enterprise Account Executive - 1Cloud Communications<br>8530 Eagle Point Blvd, Suite 100, Lake Elmo, MN<br>www.1cloudcommunications.com`;
+
+// One follow-up job per agent.  Since 18 Nov 2026 (Jonathan: "400 a week of new step ones ...
+// the rest of the sending should be follow-ups") each job makes its own run every workday, so
+// nobody has to release it: the agent's step 1s (80/day, scheduler.js) and these follow-ups
+// share her gap and fill her day to the cap.  A run set to 'stopped' for the day stays stopped.
+//   Kayla: replies-all on Steven's step 3 ("checking back") note, as before.
+//   Megan: replies-all on Jared's latest note once it is 2+ days old.  Her first-ever run starts
+//          as a canary (BCC Jonathan, checked in Sent Items) and carries on by itself if verified.
+const JOBS = [
+  { job: JOB, name: 'Kayla', partnerName: 'Steven', agentId: KAYLA_ID, from: KAYLA, partner: STEVEN, seqs: [8, 10],
+    subj: SUBJ_LOG, body: BODY, cap: KAYLA_DAILY_CAP, needStep3: true },
+  { job: 'megan_step4', name: 'Megan', partnerName: 'Jared', agentId: 2, from: MEGAN, partner: JARED, seqs: [12],
+    subj: 'Megan step 4', body: MEGAN_BODY, cap: MEGAN_DAILY_CAP, needStep3: false, minPartnerAgeH: 48 },
+];
+const AUTO_START = '2026-11-19';   // daily auto runs begin here
+const AUTO_GAP_SEC = 110;
 
 export const ENGINE_RUNS_TABLE = `CREATE TABLE IF NOT EXISTS engine_runs (
   id INT AUTO_INCREMENT PRIMARY KEY,
@@ -71,56 +92,86 @@ async function setRun(id, fields) {
 }
 
 // Why a thread is not ready for step 4, or null when it is.  Mirrors send-kayla-step4-v2.mjs.
-async function checkThread(e) {
+async function checkThread(e, J = JOBS[0]) {
   if (!e.conversation_id) return { why: 'no thread', hold: 'day' };
-  const msgs = await getThreadMessages({ email: KAYLA, conversationId: e.conversation_id });
-  const st = msgs.filter(m => addr(m) === STEVEN);
-  const hasStep3 = st.some(m => /checking back/i.test(m.bodyPreview || ''))
-    || (st.length >= 2 && st[0].receivedDateTime < '2026-10-12' && st[st.length - 1].receivedDateTime >= '2026-10-12');
-  if (!hasStep3) return { why: 'no Steven step 3', hold: '30m' };
+  const msgs = await getThreadMessages({ email: J.from, conversationId: e.conversation_id });
+  const st = msgs.filter(m => addr(m) === J.partner);
+  const waitWhy = `no ${J.partnerName} ${J.needStep3 ? 'step 3' : 'note'}`;
+  if (J.needStep3) {
+    const hasStep3 = st.some(m => /checking back/i.test(m.bodyPreview || ''))
+      || (st.length >= 2 && st[0].receivedDateTime < '2026-10-12' && st[st.length - 1].receivedDateTime >= '2026-10-12');
+    if (!hasStep3) return { why: waitWhy, hold: '30m' };
+  } else if (!st.length) return { why: waitWhy, hold: '30m' };
   const last = st[st.length - 1];
-  const ext = msgs.filter(m => addr(m) !== STEVEN && !addr(m).endsWith('@1cloudnow.com') && !addr(m).endsWith('@1cloudcommunications.com'));
+  const ext = msgs.filter(m => addr(m) !== J.partner && !addr(m).endsWith('@1cloudnow.com') && !addr(m).endsWith('@1cloudcommunications.com'));
   if (ext.some(m => !isOOO(m))) return { why: 'prospect replied', hold: 'day' };
-  if (msgs.some(m => addr(m) === KAYLA && m.receivedDateTime > last.receivedDateTime)) return { why: 'Kayla already after Steven', hold: 'day' };
-  const to = (last.toRecipients || []).map(x => x.emailAddress.address.toLowerCase());
-  if (!to.includes((e.email || '').toLowerCase())) return { why: 'prospect not on Steven note', hold: 'day' };
+  if (msgs.some(m => addr(m) === J.from && m.receivedDateTime > last.receivedDateTime)) return { why: `${J.name} already after ${J.partnerName}`, hold: 'day' };
+  if (J.minPartnerAgeH && Date.now() - new Date(last.receivedDateTime).getTime() < J.minPartnerAgeH * 3600e3) return { why: `${J.partnerName} note too recent`, hold: 'day' };
+  const to = [...(last.toRecipients || []), ...(J.needStep3 ? [] : (last.ccRecipients || []))].map(x => x.emailAddress.address.toLowerCase());
+  if (!to.includes((e.email || '').toLowerCase())) return { why: `prospect not on ${J.partnerName} note`, hold: 'day' };
   return { ready: true, lastId: last.id };
 }
 
 // Dry run: how many threads are ready right now and why the rest aren't.  Sends nothing.
-export async function previewKaylaStep4({ max = 9999 } = {}) {
+async function followupRows(J) {
   const [rows] = await pool.query(
     `SELECT pe.id enr, pe.conversation_id, p.id pid, p.first_name, p.last_name, p.company, p.email
      FROM partner_enrollments pe JOIN prospects p ON p.id = pe.prospect_id
-     WHERE pe.sequence_id IN (8, 10) AND pe.agent_id = ? AND pe.status = 'active' AND pe.current_step = 3
+     WHERE pe.sequence_id IN (?) AND pe.agent_id = ? AND pe.status = 'active' AND pe.current_step = 3
        AND p.status NOT IN (${DEAD.map(() => '?').join(', ')})
        AND NOT EXISTS (SELECT 1 FROM exclusion_list x WHERE x.email = p.email)
        AND NOT EXISTS (SELECT 1 FROM sent_emails se WHERE se.prospect_id = p.id AND se.subject = ?)
      ORDER BY pe.partner_replied_at, pe.id`,
-    [KAYLA_ID, ...DEAD, SUBJ_LOG]
+    [J.seqs, J.agentId, ...DEAD, J.subj]
   );
+  return rows;
+}
+
+export async function previewKaylaStep4({ max = 9999, who = 'Kayla' } = {}) {
+  const J = JOBS.find(j => j.name === who) || JOBS[0];
+  const rows = await followupRows(J);
   const tally = { candidates: rows.length, ready: 0 };
   const ready = [];
   for (const e of rows.slice(0, max)) {
-    const r = await checkThread(e);
+    const r = await checkThread(e, J);
     if (r.ready) { tally.ready++; ready.push(`#${e.enr} ${e.first_name} ${e.last_name} (${e.company})`); }
     else tally[r.why] = (tally[r.why] || 0) + 1;
   }
   return { tally, ready };
 }
 
+// Today's run for a job; from AUTO_START, made automatically on workdays if none exists yet.
+async function ensureRun(J) {
+  if (ctDate() < AUTO_START) return;
+  const [any] = await pool.query('SELECT id FROM engine_runs WHERE job = ? AND run_date = ? LIMIT 1', [J.job, ctDate()]);
+  if (any.length) return;
+  const [ever] = await pool.query('SELECT id FROM engine_runs WHERE job = ? LIMIT 1', [J.job]);
+  const status = ever.length ? 'active' : 'canary';
+  await pool.execute(
+    `INSERT INTO engine_runs (job, run_date, status, send_limit, gap_sec, waiting_reason) VALUES (?, ?, ?, ?, ?, 'auto: daily follow-ups')`,
+    [J.job, ctDate(), status, J.cap, AUTO_GAP_SEC]);
+  console.log(`[${J.name}Step4] auto run created for ${ctDate()} (${status})`);
+}
+
 export async function runKaylaStep4Tick() {
   if (!isWeekday() || !inWindow()) return;
+  for (const J of JOBS) {
+    try { await ensureRun(J); await runFollowupTick(J); }
+    catch (err) { console.error(`[${J.name}Step4] ${err.message}`); }
+  }
+}
 
+async function runFollowupTick(J) {
+  const KAYLA_ID = J.agentId, KAYLA = J.from, SUBJ_LOG = J.subj, BODY = J.body, KAYLA_DAILY_CAP = J.cap;
   const [runs] = await pool.query(
     `SELECT * FROM engine_runs WHERE job = ? AND run_date = ? AND status IN ('canary', 'active') ORDER BY id DESC LIMIT 1`,
-    [JOB, ctDate()]
+    [J.job, ctDate()]
   );
   if (!runs.length) return;
   const run = runs[0];
 
   const lockConn = await pool.getConnection();
-  const [lk] = await lockConn.query(`SELECT GET_LOCK('kayla_step4', 0) AS got`);
+  const [lk] = await lockConn.query(`SELECT GET_LOCK(?, 0) AS got`, [J.job]);
   if (lk[0].got !== 1) { lockConn.release(); return; }
 
   try {
@@ -129,39 +180,30 @@ export async function runKaylaStep4Tick() {
     const mins = minsSinceCtMidnight();
     const [[cap]] = await pool.query(
       `SELECT COUNT(*) n FROM sent_emails WHERE agent_id = ? AND sent_at >= NOW() - INTERVAL ${mins} MINUTE`, [KAYLA_ID]);
-    if (cap.n >= KAYLA_DAILY_CAP) { await setRun(run.id, { waiting_reason: `idle: Kayla daily cap (${KAYLA_DAILY_CAP}) reached` }); return; }
+    if (cap.n >= KAYLA_DAILY_CAP) { await setRun(run.id, { waiting_reason: `idle: ${J.name} daily cap (${KAYLA_DAILY_CAP}) reached` }); return; }
 
     // Gap since Kayla's last email of any kind (step 1s from the cadence count too)
     const [[gap]] = await pool.query(
       `SELECT COUNT(*) n FROM sent_emails WHERE agent_id = ? AND sent_at > NOW() - INTERVAL ? SECOND`, [KAYLA_ID, run.gap_sec]);
     if (gap.n) { await setRun(run.id, { waiting_reason: 'gap' }); return; }
 
-    const [rows] = await pool.query(
-      `SELECT pe.id enr, pe.conversation_id, p.id pid, p.first_name, p.last_name, p.company, p.email
-       FROM partner_enrollments pe JOIN prospects p ON p.id = pe.prospect_id
-       WHERE pe.sequence_id IN (8, 10) AND pe.agent_id = ? AND pe.status = 'active' AND pe.current_step = 3
-         AND p.status NOT IN (${DEAD.map(() => '?').join(', ')})
-         AND NOT EXISTS (SELECT 1 FROM exclusion_list x WHERE x.email = p.email)
-         AND NOT EXISTS (SELECT 1 FROM sent_emails se WHERE se.prospect_id = p.id AND se.subject = ?)
-       ORDER BY pe.partner_replied_at, pe.id`,
-      [KAYLA_ID, ...DEAD, SUBJ_LOG]
-    );
+    const rows = await followupRows(J);
 
     const now = Date.now();
     let checks = 0, waitingSteven = 0, unchecked = 0, pick = null;
     for (const e of rows) {
       const c = skipCache.get(e.enr);
-      if (c && c.until > now) { if (c.why === 'no Steven step 3') waitingSteven++; continue; }
+      if (c && c.until > now) { if (c.why.startsWith('no ')) waitingSteven++; continue; }
       if (checks >= GRAPH_CHECKS_PER_TICK) { unchecked++; continue; }
       checks++;
-      const r = await checkThread(e);
+      const r = await checkThread(e, J);
       if (r.ready) { pick = { ...e, lastId: r.lastId }; break; }
       skipCache.set(e.enr, { why: r.why, until: now + (r.hold === '30m' ? 30 * 60e3 : 12 * 3600e3) });
-      if (r.why === 'no Steven step 3') waitingSteven++;
+      if (r.why.startsWith('no ')) waitingSteven++;
     }
 
     if (!pick) {
-      await setRun(run.id, { waiting_reason: unchecked ? 'checking threads' : `idle: none ready (${waitingSteven} waiting on Steven step 3)` });
+      await setRun(run.id, { waiting_reason: unchecked ? 'checking threads' : `idle: none ready (${waitingSteven} waiting on ${J.partnerName})` });
       return;
     }
 
@@ -173,7 +215,7 @@ export async function runKaylaStep4Tick() {
       [pick.pid, KAYLA_ID, pick.email, SUBJ_LOG, html]
     );
     skipCache.delete(pick.enr);
-    console.log(`[KaylaStep4] SENT ${run.sent + 1}/${run.send_limit} #${pick.enr} ${pick.first_name} ${pick.last_name} (${pick.company})${canary ? ' CANARY' : ''}`);
+    console.log(`[${J.name}Step4] SENT ${run.sent + 1}/${run.send_limit} #${pick.enr} ${pick.first_name} ${pick.last_name} (${pick.company})${canary ? ' CANARY' : ''}`);
 
     if (!canary) {
       await pool.execute(
@@ -187,26 +229,28 @@ export async function runKaylaStep4Tick() {
     const m = (await getRecentSent({ email: KAYLA }))[0] || {};
     const list = xs => (xs || []).map(x => x.emailAddress.address).join(', ');
     const verified = (m.bccRecipients || []).some(x => x.emailAddress.address.toLowerCase() === JONATHAN);
+    // From AUTO_START a verified canary carries on by itself (Megan's first auto day); unverified still waits.
+    const autoGo = verified && ctDate() >= AUTO_START;
     await pool.execute(
-      `UPDATE engine_runs SET status = 'canary_sent', sent = sent + 1, last_send_at = NOW(), heartbeat_at = NOW(), error_count = 0, last_error = NULL,
+      `UPDATE engine_runs SET status = ?, sent = sent + 1, last_send_at = NOW(), heartbeat_at = NOW(), error_count = 0, last_error = NULL,
        waiting_reason = ? WHERE id = ?`,
-      [`idle: canary ${verified ? 'verified' : 'NOT verified'}, waiting for go`.slice(0, 160), run.id]);
+      [autoGo ? 'active' : 'canary_sent', (autoGo ? 'sending' : `idle: canary ${verified ? 'verified' : 'NOT verified'}, waiting for go`).slice(0, 160), run.id]);
     await sendMail({
       fromEmail: ALERT_FROM, to: JONATHAN,
-      subject: `Kayla step 4 canary sent: ${pick.company}`,
+      subject: `${J.name} follow-up canary sent: ${pick.company}`,
       html: `<p>Canary sent to ${pick.first_name} ${pick.last_name} (${pick.company}).</p>
-<p>${m.subject || ''}<br>To: ${list(m.toRecipients)}<br>BCC: ${list(m.bccRecipients)}</p>
-<p>${verified ? 'Verified in Kayla\'s Sent Items.' : 'Could NOT verify it in Sent Items. Check before going ahead.'}  The other ${run.send_limit - 1} wait for your go.</p>`,
+<p>${m.subject || ''}<br>To: ${list(m.toRecipients)}<br>CC: ${list(m.ccRecipients)}<br>BCC: ${list(m.bccRecipients)}</p>
+<p>${verified ? `Verified in ${J.name}'s Sent Items.` : 'Could NOT verify it in Sent Items. Check before going ahead.'}  ${autoGo ? `The rest of today's follow-ups are going out now.` : `The other ${run.send_limit - 1} wait for your go.`}</p>`,
     });
   } catch (err) {
-    console.error(`[KaylaStep4] ${err.message}`);
+    console.error(`[${J.name}Step4] ${err.message}`);
     try {
       await pool.execute(
         `UPDATE engine_runs SET error_count = error_count + 1, last_error = ?, heartbeat_at = NOW() WHERE id = ?`,
         [String(err.message).slice(0, 255), run.id]);
     } catch {}
   } finally {
-    try { await lockConn.query(`SELECT RELEASE_LOCK('kayla_step4')`); } catch {}
+    try { await lockConn.query(`SELECT RELEASE_LOCK(?)`, [J.job]); } catch {}
     lockConn.release();
   }
 }
@@ -230,13 +274,14 @@ export async function runEngineWatchdog() {
 
   // 1. Kayla step 4 run.  "No send" means Kayla has sent nothing of any kind: step 4s wait their turn
   // while step 1s are going out (shared gap), and that is healthy, not a stall (false alarm 9 Nov 2026).
+  for (const J of JOBS) {
   const [runs] = await pool.query(
     `SELECT *, TIMESTAMPDIFF(MINUTE, heartbeat_at, NOW()) hb_age,
             TIMESTAMPDIFF(MINUTE, GREATEST(COALESCE(last_send_at, created_at), created_at,
-              COALESCE((SELECT MAX(sent_at) FROM sent_emails WHERE agent_id = ${KAYLA_ID}), created_at)), NOW()) send_age,
+              COALESCE((SELECT MAX(sent_at) FROM sent_emails WHERE agent_id = ${J.agentId}), created_at)), NOW()) send_age,
             TIMESTAMPDIFF(MINUTE, alerted_at, NOW()) alert_age
      FROM engine_runs WHERE job = ? AND run_date = ? AND status IN ('canary', 'active')`,
-    [JOB, ctDate()]
+    [J.job, ctDate()]
   );
   for (const r of runs) {
     if (r.alert_age !== null && r.alert_age < 60) continue;
@@ -246,12 +291,13 @@ export async function runEngineWatchdog() {
     else if (r.error_count >= 3) why = `${r.error_count} errors in a row: ${r.last_error}`;
     else if (!idle && r.send_age >= 15) why = `no send in ${r.send_age} minutes (status: ${r.waiting_reason || 'none'})`;
     if (!why) continue;
-    await alert(`Platform alert: Kayla step 4 sends stalled`, [
-      `Kayla step 4 run: ${r.sent} of ${r.send_limit} sent.`,
+    await alert(`Platform alert: ${J.name} follow-up sends stalled`, [
+      `${J.name} follow-up run: ${r.sent} of ${r.send_limit} sent.`,
       `Problem: ${why}.`,
       `Last send: ${r.last_send_at ? new Date(r.last_send_at).toLocaleTimeString('en-US', { timeZone: 'America/Chicago' }) + ' CT' : 'none yet'}.`,
     ]);
     await pool.execute(`UPDATE engine_runs SET alerted_at = NOW() WHERE id = ?`, [r.id]);
+  }
   }
 
   // 2. Partner cadence step 1s: released intros are due but the agent has gone quiet
@@ -271,7 +317,7 @@ export async function runEngineWatchdog() {
     DEAD
   );
   for (const d of due) {
-    const cap = d.agent_id === KAYLA_ID ? KAYLA_DAILY_CAP : PARTNER_DAILY_CAP;
+    const cap = d.agent_id === KAYLA_ID ? KAYLA_DAILY_CAP : d.agent_id === 2 ? MEGAN_DAILY_CAP : PARTNER_DAILY_CAP;
     if (d.today >= cap || d.quiet === null || d.quiet < 15) continue;
     const last = lastStepOneAlert.get(d.agent_id) || 0;
     if (Date.now() - last < 60 * 60e3) continue;

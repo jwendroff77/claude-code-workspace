@@ -8,7 +8,7 @@ import { createLinkedInTask } from '../routes/tasks.js';
 import { recalculateAllScores } from './scoring.js';
 import { checkDomainHealth } from './domain.js';
 import { countBusinessDays, pickFirstDuePerAgent } from './partnerCadenceDue.js';
-import { runKaylaStep4Tick, runEngineWatchdog, PARTNER_DAILY_CAP, KAYLA_DAILY_CAP } from './kaylaStep4.js';
+import { runKaylaStep4Tick, runEngineWatchdog, PARTNER_DAILY_CAP, KAYLA_DAILY_CAP, MEGAN_DAILY_CAP } from './kaylaStep4.js';
 import { withOptOut } from './optOut.js';
 
 // Only NeverBounce's own results count as checked.  Anything else (empty, or a label
@@ -1061,7 +1061,7 @@ async function processPartnerCadences() {
      -- unbounded. This is a hard safety cap, not the per-channel target.
      AND (SELECT COUNT(*) FROM sent_emails se_cap
           WHERE se_cap.agent_id = pe.agent_id
-            AND se_cap.sent_at >= NOW() - INTERVAL ${minsSinceCtMidnight} MINUTE) < IF(pe.agent_id = 9, ${KAYLA_DAILY_CAP}, ${DAILY_CAP})
+            AND se_cap.sent_at >= NOW() - INTERVAL ${minsSinceCtMidnight} MINUTE) < IF(pe.agent_id = 9, ${KAYLA_DAILY_CAP}, IF(pe.agent_id = 2, ${MEGAN_DAILY_CAP}, ${DAILY_CAP}))
      -- Dead-status backstop: inbox actions set prospects.status but historically
      -- only cancelled the DRIP enrollment; never send partner steps to dead leads
      AND p.status NOT IN ('disqualified', 'unsubscribed', 'bounced', 'booked', 'handed_off', 'won', 'engaged')
