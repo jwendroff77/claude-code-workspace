@@ -975,8 +975,10 @@ async function processPartnerCadences() {
   // 13 Nov 2026 only (Jonathan, 2:36pm start, 200 new step 1s): flat 1-minute gaps (50s, ticks
   // run every minute) so the last of the 200 go out before 4:55pm.
   const kaylaCtDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+  // 18 Nov 2026 only (Jonathan, 1:40pm restart after the bounce-alarm hold, "go shorter spaces"):
+  // flat 1-minute gaps so ~175 step 1s go out before 4:55pm.  Back to random 2/3 on 19 Nov.
   const KAYLA_GAP_SEC = kaylaCtDate === '2026-11-12' ? 110
-    : kaylaCtDate === '2026-11-13' ? 50
+    : (kaylaCtDate === '2026-11-13' || kaylaCtDate === '2026-11-18') ? 50
     : (Math.random() < 0.5 ? 110 : 170);
 
   // "Today" in Central time, measured on the DB clock.  The Railway MySQL clock runs
