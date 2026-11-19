@@ -1186,6 +1186,11 @@ async function processPartnerCadences() {
         let body = step.body_html || '';
         body = body.replace(/\{\{aiOpener\}\}/g, aiOpener);
         body = personalizeContent(body, enrollment);
+        // A/B test on the intro copy, if one is running (cadenceAb.js, 19 Nov 2026).
+        const { applyAb, recordAbSend } = await import('./cadenceAb.js');
+        const abRes = await applyAb({ stepKey: 'step1', agentId: enrollment.agent_id, prospectId: enrollment.prospect_id,
+          html: body, partnerName: String(enrollment.partner_name || '').split(' ')[0] });
+        body = abRes.html;
         body = withOptOut(body, enrollment.prospect_id, enrollment.prospect_email); // "Not a fit? Unsubscribe here" (17 Nov 2026)
         const subject = personalizeContent(step.subject_line, enrollment);
 
@@ -1205,11 +1210,12 @@ async function processPartnerCadences() {
         });
 
         // Log to sent_emails
-        await pool.execute(
+        const [s1Logged] = await pool.execute(
           `INSERT INTO sent_emails (prospect_id, agent_id, subject, body, sent_at)
            VALUES (?, ?, ?, ?, NOW())`,
           [enrollment.prospect_id, enrollment.agent_id, subject, body]
         );
+        await recordAbSend({ ab: abRes.ab, prospectId: enrollment.prospect_id, agentId: enrollment.agent_id, sentEmailId: s1Logged.insertId });
 
         // Wait for Graph to index the message, then grab conversationId + messageId
         let conversationId = null;

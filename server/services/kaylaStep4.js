@@ -207,13 +207,18 @@ async function runFollowupTick(J) {
       return;
     }
 
-    const html = withOptOut(BODY.replace(/\{\{firstName\}\}/g, pick.first_name || ''), pick.pid, pick.email);
+    // A/B test on the follow-up copy, if one is running (cadenceAb.js).  Swaps text before the opt-out line.
+    const { applyAb, recordAbSend } = await import('./cadenceAb.js');
+    const { html: abBody, ab } = await applyAb({ stepKey: 'step4', agentId: KAYLA_ID, prospectId: pick.pid,
+      html: BODY.replace(/\{\{firstName\}\}/g, pick.first_name || ''), partnerName: J.partnerName });
+    const html = withOptOut(abBody, pick.pid, pick.email);
     const canary = run.status === 'canary';
     await replyAllWithBcc({ fromEmail: KAYLA, messageId: pick.lastId, html, bcc: canary ? JONATHAN : null });
-    await pool.execute(
+    const [logged] = await pool.execute(
       `INSERT INTO sent_emails (prospect_id, agent_id, to_email, subject, body, status, sent_at) VALUES (?, ?, ?, ?, ?, 'sent', NOW())`,
       [pick.pid, KAYLA_ID, pick.email, SUBJ_LOG, html]
     );
+    await recordAbSend({ ab, prospectId: pick.pid, agentId: KAYLA_ID, sentEmailId: logged.insertId });
     skipCache.delete(pick.enr);
     console.log(`[${J.name}Step4] SENT ${run.sent + 1}/${run.send_limit} #${pick.enr} ${pick.first_name} ${pick.last_name} (${pick.company})${canary ? ' CANARY' : ''}`);
 

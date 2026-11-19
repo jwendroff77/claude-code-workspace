@@ -141,6 +141,8 @@ export function renderBrief(b) {
 
   parts.push(H('Team, last week'), `<table style="border-collapse:collapse;font-size:14px">${b.team.map(([n, t]) => `<tr><td style="padding:2px 16px 2px 0"><b>${esc(n)}</b></td><td>${esc(t)}</td></tr>`).join('')}</table>`);
 
+  if (b.abTests && b.abTests.length) parts.push(H('A/B tests'), UL(b.abTests));
+
   const tri = renderTriage(b.triage);
   if (tri) parts.push(H('Your inbox'), `<p>${tri}</p>`);
 
@@ -172,7 +174,9 @@ export async function buildBrief(now = new Date()) {
     due_this_week: due, replies_waiting: replies.length, approvals_waiting: approvals.length + waiting.length, health, team_last_week: team,
     calendar_next_three_weeks: upcoming, notes,
   });
-  return { opener, due, replies, approvals, waiting, meetings, done, health, team, triage, ahead, cost };
+  const { abBriefLines } = await import('./cadenceAb.js');
+  const abTests = await abBriefLines().catch(() => []);
+  return { opener, due, replies, approvals, waiting, meetings, done, health, team, triage, ahead, cost, abTests };
 }
 
 export async function sendBrief(now = new Date()) {

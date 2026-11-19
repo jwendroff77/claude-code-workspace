@@ -24,6 +24,7 @@ import partnerCadenceRoutes from './routes/partnerCadence.js';
 import unsubscribeRoutes from './routes/unsubscribe.js';
 import trackingRoutes from './routes/tracking.js';
 import replacementRoutes from './routes/replacement.js';
+import cadenceAbRoutes from './routes/cadenceAb.js';
 import analyticsRoutes from './routes/analytics.js';
 import abRoutes from './routes/ab.js';
 import taskRoutes from './routes/tasks.js';
@@ -70,6 +71,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/partner-cadence', partnerCadenceRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/ab', abRoutes);
+app.use('/api/cadence-ab', cadenceAbRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/signal-intel', signalIntelRoutes);
 
