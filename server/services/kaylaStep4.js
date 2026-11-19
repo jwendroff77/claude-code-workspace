@@ -79,9 +79,14 @@ const addr = m => (m.from?.emailAddress?.address || '').toLowerCase();
 const isOOO = m => /automatic reply|auto(matic)?[- ]?reply|out of (the )?office|\booo\b|away from|on leave|undeliverable|delivery has failed/i.test(`${m.subject} ${m.bodyPreview}`);
 
 // Threads that weren't ready, so each tick doesn't re-read them from Graph.
-// 'prospect replied' holds for the day; the rest are re-checked after 30 minutes
-// (Steven may send his step 3 later in the day).
+// 'prospect replied' holds for the day; the rest are re-checked after 3 hours
+// (Steven may send his step 3 later in the day).  Was 30 minutes until 19 Nov 2026: with ~1,000
+// threads that made the scan circle back over the oldest ones and never reach the ready ones.
 const skipCache = new Map();
+const NOT_READY_HOLD_MS = 3 * 3600e3;
+// Ready threads found by the scan, per job, waiting for the next clear gap.
+const readyQueue = new Map();
+const READY_TARGET = 5;
 
 async function setRun(id, fields) {
   const keys = Object.keys(fields);
@@ -182,30 +187,48 @@ async function runFollowupTick(J) {
       `SELECT COUNT(*) n FROM sent_emails WHERE agent_id = ? AND sent_at >= NOW() - INTERVAL ${mins} MINUTE`, [KAYLA_ID]);
     if (cap.n >= KAYLA_DAILY_CAP) { await setRun(run.id, { waiting_reason: `idle: ${J.name} daily cap (${KAYLA_DAILY_CAP}) reached` }); return; }
 
+    // Scan threads EVERY tick, even during the gap, and keep a short list of ready ones (19 Nov 2026 fix).
+    // Before, the scan only ran when the gap was clear; Kayla's step 1s left few clear minutes, so it kept
+    // re-checking her oldest not-ready threads and sent 0 follow-ups all morning.
+    const ready = readyQueue.get(J.job) || [];
+    readyQueue.set(J.job, ready);
+    const now = Date.now();
+    let checks = 0, waitingSteven = 0, unchecked = 0;
+    if (ready.length < READY_TARGET) {
+      const rows = await followupRows(J);
+      const queued = new Set(ready.map(r => r.enr));
+      for (const e of rows) {
+        if (queued.has(e.enr)) continue;
+        const c = skipCache.get(e.enr);
+        if (c && c.until > now) { if (c.why.startsWith('no ')) waitingSteven++; continue; }
+        if (checks >= GRAPH_CHECKS_PER_TICK || ready.length >= READY_TARGET) { unchecked++; continue; }
+        checks++;
+        const r = await checkThread(e, J);
+        if (r.ready) { ready.push(e); continue; }
+        skipCache.set(e.enr, { why: r.why, until: now + (r.hold === '30m' ? NOT_READY_HOLD_MS : 12 * 3600e3) });
+        if (r.why.startsWith('no ')) waitingSteven++;
+      }
+    }
+
     // Gap since Kayla's last email of any kind (step 1s from the cadence count too)
     const [[gap]] = await pool.query(
       `SELECT COUNT(*) n FROM sent_emails WHERE agent_id = ? AND sent_at > NOW() - INTERVAL ? SECOND`, [KAYLA_ID, run.gap_sec]);
-    if (gap.n) { await setRun(run.id, { waiting_reason: 'gap' }); return; }
+    if (gap.n) { await setRun(run.id, { waiting_reason: `gap (${ready.length} ready)` }); return; }
 
-    const rows = await followupRows(J);
-
-    const now = Date.now();
-    let checks = 0, waitingSteven = 0, unchecked = 0, pick = null;
-    for (const e of rows) {
-      const c = skipCache.get(e.enr);
-      if (c && c.until > now) { if (c.why.startsWith('no ')) waitingSteven++; continue; }
-      if (checks >= GRAPH_CHECKS_PER_TICK) { unchecked++; continue; }
-      checks++;
-      const r = await checkThread(e, J);
-      if (r.ready) { pick = { ...e, lastId: r.lastId }; break; }
-      skipCache.set(e.enr, { why: r.why, until: now + (r.hold === '30m' ? 30 * 60e3 : 12 * 3600e3) });
-      if (r.why.startsWith('no ')) waitingSteven++;
-    }
-
-    if (!pick) {
+    if (!ready.length) {
       await setRun(run.id, { waiting_reason: unchecked ? 'checking threads' : `idle: none ready (${waitingSteven} waiting on ${J.partnerName})` });
       return;
     }
+
+    // Re-check the thread right before sending: the prospect may have replied since it was queued.
+    const next = ready.shift();
+    const fresh = await checkThread(next, J);
+    if (!fresh.ready) {
+      skipCache.set(next.enr, { why: fresh.why, until: now + (fresh.hold === '30m' ? NOT_READY_HOLD_MS : 12 * 3600e3) });
+      await setRun(run.id, { waiting_reason: `skipped #${next.enr}: ${fresh.why}` });
+      return;
+    }
+    const pick = { ...next, lastId: fresh.lastId };
 
     // A/B test on the follow-up copy, if one is running (cadenceAb.js).  Swaps text before the opt-out line.
     const { applyAb, recordAbSend } = await import('./cadenceAb.js');
