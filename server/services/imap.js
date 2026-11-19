@@ -180,7 +180,9 @@ export async function checkNewEmails(agent) {
                   .replace(/&nbsp;/g, ' ')
                   .replace(/\s+/g, ' ')
                   .slice(0, 6000);
-                await handlePossibleReplacement({ agent, prospectId, subject: msg.subject || '', text: fullText, senderEmail: fromEmail });
+                const { replyOnly } = await import('./replyAutoStop.js');
+                await handlePossibleReplacement({ agent, prospectId, subject: msg.subject || '', text: fullText, senderEmail: fromEmail,
+                  ccEmails, ownText: replyOnly(msg.body?.content || bodyText || ''), sentiment });
               } catch (e) {
                 console.error(`[Replacement] check failed for ${fromEmail}: ${e.message}`);
               }

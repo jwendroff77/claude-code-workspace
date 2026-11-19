@@ -41,7 +41,26 @@ async function load(req, res) {
   return row;
 }
 
+// The email links only open a confirm page: mail scanners open links, and an open must never
+// approve anyone (same fix as the unsubscribe link, 17 Nov 2026).  The button POSTs.
+function confirmPage(row, action) {
+  const name = [row.first_name, row.last_name].filter(Boolean).join(' ') || row.email;
+  const approve = action === 'approve';
+  return page(approve ? `Approve ${name}?` : `Skip ${name}?`, `
+    <p><strong>${name}</strong> (${row.email}) at ${row.company}.</p>
+    <p>${approve ? 'They get the step 1 intro, partner CC\'d, in the next weekday send window.' : 'No email will go to them.'}</p>
+    <form method="post"><button type="submit" style="background:${approve ? '#0a7d32' : '#777'};color:#fff;border:0;padding:10px 22px;border-radius:4px;font-size:15px;font-weight:bold;cursor:pointer">${approve ? 'Approve' : 'Skip'}</button></form>`);
+}
 router.get('/approve/:id/:sig', async (req, res) => {
+  try { const row = await load(req, res); if (row) res.send(confirmPage(row, 'approve')); }
+  catch (e) { res.status(500).send(page('Something went wrong', '<p>Nothing was changed.</p>')); }
+});
+router.get('/skip/:id/:sig', async (req, res) => {
+  try { const row = await load(req, res); if (row) res.send(confirmPage(row, 'skip')); }
+  catch (e) { res.status(500).send(page('Something went wrong', '<p>Nothing was changed.</p>')); }
+});
+
+router.post('/approve/:id/:sig', async (req, res) => {
   try {
     const row = await load(req, res);
     if (!row) return;
@@ -60,7 +79,7 @@ router.get('/approve/:id/:sig', async (req, res) => {
   }
 });
 
-router.get('/skip/:id/:sig', async (req, res) => {
+router.post('/skip/:id/:sig', async (req, res) => {
   try {
     const row = await load(req, res);
     if (!row) return;

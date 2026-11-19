@@ -342,7 +342,7 @@ Return ONLY the JSON array, nothing else.`,
 // Did the sender leave their role, and did they name who replaced them?
 // Used to stage a replacement contact for Jonathan's approval.  Temporary coverage
 // ("contact Jane while I'm out") is NOT a replacement.
-export async function extractReplacement({ text, company, formerName }) {
+export async function extractReplacement({ text, company, formerName, ccEmails = [] }) {
   const anthropic = getClient();
   const message = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
@@ -350,16 +350,17 @@ export async function extractReplacement({ text, company, formerName }) {
     messages: [
       {
         role: 'user',
-        content: `This is a reply to a sales email sent to ${formerName || 'a contact'} at ${company || 'a company'}.
+        content: `This is a reply to a sales email (about business internet and network services) sent to ${formerName || 'a contact'} at ${company || 'a company'}.  The reply may include the quoted original email below it; only the reply's own words count.
 
-Decide two things:
+Decide three things:
 1. departed: true only if the reply says ${formerName || 'the contact'} has permanently retired, left the company, or is no longer in the role.  Out-of-office, vacation, leave, or "contact X while I'm away" is NOT departed.
-2. replacement: the specific PERSON the reply names as taking over or as the right contact now.  Only include an email address that appears in the reply text.  A shared mailbox (info@, accounting@, it@, support@) or a phone number alone is not a person.
+2. referral: true if ${formerName || 'the contact'} is still there but says someone else is the right person for this (for example "not the best person, talk to Matt", "I've CC'd Dustin", "this would best be with Joe").  An out-of-office "contact X while I'm away" is NOT a referral.  Someone for accounting or billing questions only is NOT a referral for network services.
+3. replacement: the specific PERSON the reply names as taking over or as the right contact now.  Only include an email address that appears in the reply text or in this CC list: ${ccEmails.length ? ccEmails.join(', ') : '(none)'}.  If the person was CC'd, use their CC address.  A shared mailbox (info@, accounting@, it@, support@) or a phone number alone is not a person.  Never use a comcast.com or 1cloud address.
 
 Reply text:
 ${text}
 
-Return JSON only: {"departed": true|false, "replacement": {"first_name": "", "last_name": "", "title": "", "email": ""} or null, "quote": "the sentence that shows it"}`,
+Return JSON only: {"departed": true|false, "referral": true|false, "replacement": {"first_name": "", "last_name": "", "title": "", "email": ""} or null, "quote": "the sentence that shows it"}`,
       },
     ],
   });

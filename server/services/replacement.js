@@ -15,6 +15,11 @@ import { signLink, verifyLink } from './linkSecret.js';
 // separates "away this week" from "gone for good".
 const DEPARTURE = /\b(retired|retiring|retirement|no longer (with|at|employed|in (this|that|the|my) (role|position))|(has|have) left|left (the|our) (company|firm|organization)|last day|moved on|successor|replaced by|taken over|took over|now (handling|responsible|in charge))\b/i;
 const SHARED_MAILBOX = /^(info|accounting|accounts|ap|ar|admin|office|it|support|help|helpdesk|hr|sales|billing|contact|hello|reception)@/i;
+// "Not the best person, talk to Matt Satcher", "I've CC'd Dustin", "This would best be with @Joe Gomez"
+// (Jonathan 18 Nov 2026: referrals get the same approve-first flow as departures).
+const REFERRAL = /\b(best person|right person|better person|best contact|right contact|not the (best|right)|would (best|better) be with|best to (speak|talk)|reach out to|please contact|you (should|may want to|could|can) (contact|talk|speak|reach)|talk (to|with)|speak (to|with)|i(?:'|’)?ve cc|i have cc|cc(?:'|’)?d|cc(?:'|’)?ing|copied|copying|looping in|loop in|added .{0,30} to (this|the) (email|thread)|handles (this|that|our|all)|in charge of|responsible for|point of contact|sister company)\b/i;
+// Mail from us or the partner is never the new contact.
+const NOT_A_PROSPECT = /@(comcast\.com|1cloudnow\.com|1cloudcommunications\.com)$/i;
 
 // Public base for the approve/skip links: same host the unsubscribe links use.
 function publicBase() {
@@ -63,8 +68,19 @@ async function alert(fromEmail, subject, html) {
 }
 
 // Called for every reply from a known prospect.  Returns the staged approval id, or null.
-export async function handlePossibleReplacement({ agent, prospectId, subject, text, senderEmail }) {
-  if (!text || !DEPARTURE.test(text)) return null;
+export async function handlePossibleReplacement({ agent, prospectId, subject, text, senderEmail, ccEmails = '', ownText = '', sentiment = '' }) {
+  // The gate reads only the prospect's own words when we have them, so our quoted email can't trip it.
+  const gateText = ownText || text;
+  const isDeparture = DEPARTURE.test(gateText);
+  if (!text || !(isDeparture || REFERRAL.test(gateText))) return null;
+  // A plain no ("please remove us", "not interested") is a no, never a referral: replyAutoStop handles it.
+  // Interested replies stay with the person who wrote them.
+  if (!isDeparture && ['negative', 'positive', 'meeting_request', 'not_now'].includes(sentiment)) return null;
+  // Comcast already owns the account: replyAutoStop pulls it, never stage anyone there.
+  const { isComcastOwned } = await import('./replyAutoStop.js');
+  if (isComcastOwned(gateText)) return null;
+  const ccList = String(ccEmails || '').split(/[,;\s]+/).map(s => s.trim().toLowerCase())
+    .filter(e => /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(e) && !NOT_A_PROSPECT.test(e));
 
   const [[old]] = await pool.execute(
     'SELECT id, first_name, last_name, title, email, company, city, state, industry, status FROM prospects WHERE id = ?',
@@ -86,10 +102,13 @@ export async function handlePossibleReplacement({ agent, prospectId, subject, te
 
   const formerName = [old.first_name, old.last_name].filter(Boolean).join(' ');
   const mailbox = agent.smtp_user || agent.email;
-  const result = await extractReplacement({ text, company: old.company, formerName });
-  if (!result || !result.departed) return null;
+  const result = await extractReplacement({ text, company: old.company, formerName, ccEmails: ccList });
+  if (!result) return null;
+  const departed = !!result.departed;
+  const referral = !departed && !!result.referral && !!result.replacement;
+  if (!departed && !referral) return null;
 
-  // Departed either way: stop the old contact so nothing more goes to them.
+  // Either way: stop the old contact so nothing more goes to them.
   await pool.execute(
     `UPDATE partner_enrollments SET status = 'cancelled', completed_at = NOW()
      WHERE prospect_id = ? AND status <> 'cancelled'`,
@@ -101,34 +120,55 @@ export async function handlePossibleReplacement({ agent, prospectId, subject, te
     [old.id]
   );
   await pool.execute("UPDATE prospects SET status = 'disqualified', updated_at = NOW() WHERE id = ?", [old.id]);
-  await pool.execute(
-    'INSERT INTO exclusion_list (email, company, reason) VALUES (?, ?, ?)',
-    [old.email, old.company, `No longer in role (auto-detected reply): ${(result.quote || '').slice(0, 180)}`]
-  );
+  if (departed) {
+    await pool.execute(
+      'INSERT INTO exclusion_list (email, company, reason) VALUES (?, ?, ?)',
+      [old.email, old.company, `No longer in role (auto-detected reply): ${(result.quote || '').slice(0, 180)}`]
+    );
+  }
+  // A referral didn't say no, so the old contact is not Do Not Contact.
+  await pool.execute('INSERT INTO pipeline_events (prospect_id, from_status, to_status, agent_id, notes) VALUES (?,?,?,?,?)',
+    [old.id, old.status, 'disqualified', pe.agent_id,
+     departed ? 'Auto: no longer in role - cadence stopped' : 'Auto: pointed us to someone else - cadence stopped, not Do Not Contact']);
 
   const r = result.replacement || {};
-  const email = (r.email || '').trim().toLowerCase();
+  let email = (r.email || '').trim().toLowerCase();
+  // The AI may only use an address that is really in the reply or its CC line.
+  const seen = String(text).toLowerCase();
+  if (email && !seen.includes(email) && !ccList.includes(email)) email = '';
+  if (email && NOT_A_PROSPECT.test(email)) email = '';
   // Same company = the old contact's domain, or the domain the reply came from
   // (HUB International bought Catto: we emailed @catto.com, the reply and the
-  // successor were @hubinternational.com).
+  // successor were @hubinternational.com), or someone the prospect CC'd themself
+  // (United Construction 18 Nov: CC'd Dustin Prater at their sister company).
   const companyRoots = [old.email, senderEmail].filter(Boolean).map(e => rootOf(domainOf(e)));
-  const sameCompany = email && companyRoots.includes(rootOf(domainOf(email)));
+  const sameCompany = email && (companyRoots.includes(rootOf(domainOf(email))) || ccList.includes(email));
   const usable = /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(email) && !SHARED_MAILBOX.test(email) && sameCompany;
 
-  let existing = [];
-  if (usable) [existing] = await pool.execute('SELECT id FROM prospects WHERE LOWER(email) = ?', [email]);
+  let existing = [], blocked = [];
+  if (usable) {
+    [existing] = await pool.execute('SELECT id FROM prospects WHERE LOWER(email) = ?', [email]);
+    [blocked] = await pool.execute('SELECT id FROM exclusion_list WHERE LOWER(email) = ?', [email]);
+  }
 
-  if (!usable || existing.length > 0) {
-    const why = !email ? 'no replacement email was named'
+  const lead = departed
+    ? `<strong>${formerName}</strong> (${old.title || ''}) at <strong>${old.company}</strong> is no longer in the role`
+    : `<strong>${formerName}</strong> (${old.title || ''}) at <strong>${old.company}</strong> pointed us to someone else`;
+  const kind = departed ? 'has left' : 'referred us';
+
+  if (!usable || existing.length > 0 || blocked.length > 0) {
+    const named = [r.first_name, r.last_name].filter(Boolean).join(' ');
+    const why = !email ? `no email address for ${named || 'the new contact'} was in the reply or CC line`
       : !sameCompany ? `the named email (${email}) is not at ${[...new Set(companyRoots)].join(' or ')}`
       : SHARED_MAILBOX.test(email) ? `the named email (${email}) is a shared mailbox, not a person`
       : existing.length > 0 ? `${email} is already in the platform`
+      : blocked.length > 0 ? `${email} is on Do Not Contact`
       : `could not read a valid email (${email})`;
-    await alert(mailbox, `[Replacement - review] ${formerName} at ${old.company} has left`, `
-      <p><strong>${formerName}</strong> (${old.title || ''}) at <strong>${old.company}</strong> is no longer in the role, so their cadence is stopped.</p>
-      <p>No replacement was staged because ${why}.</p>
+    await alert(mailbox, `[Replacement - review] ${formerName} at ${old.company} ${kind}`, `
+      <p>${lead}, so their cadence is stopped.</p>
+      <p>No new contact was staged because ${why}.</p>
       <p><em>"${(result.quote || '').replace(/</g, '&lt;')}"</em></p>`);
-    console.log(`[Replacement] ${old.email} departed; not staged (${why})`);
+    console.log(`[Replacement] ${old.email} ${kind}; not staged (${why})`);
     return null;
   }
 
@@ -155,7 +195,7 @@ export async function handlePossibleReplacement({ agent, prospectId, subject, te
   const base = publicBase();
   const newName = [r.first_name, r.last_name].filter(Boolean).join(' ') || email;
   await alert(mailbox, `[Replacement - approve?] ${old.company}: ${formerName} -> ${newName}`, `
-    <p><strong>${formerName}</strong> (${old.title || ''}) at <strong>${old.company}</strong> is no longer in the role and named a replacement:</p>
+    <p>${lead} and named ${departed ? 'a replacement' : 'the right contact'}:</p>
     <p style="font-size:15px"><strong>${newName}</strong>${r.title ? `, ${r.title}` : ''}<br>${email}</p>
     <p><em>"${(result.quote || '').replace(/</g, '&lt;')}"</em></p>
     <p>${formerName}'s cadence is stopped.  ${newName} is staged in the same cadence and will get the step 1 intro (partner CC'd) only if you approve.</p>

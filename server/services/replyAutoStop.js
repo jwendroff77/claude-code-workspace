@@ -41,6 +41,16 @@ export function isComcastTrouble(text = '') {
     && !/(remove|unsubscribe|do not (contact|email)|don'?t (contact|email)|stop (emailing|contacting))/i.test(text);
 }
 
+// "We are currently working with David Barnes at Comcast" (Dollar Loan Center), "we've been working
+// with Angelo from Comcast" (Gentle Giant): Comcast already owns the account.  Jonathan 18 Nov 2026:
+// "pull the ones that say they are working with someone else at Comcast, period."
+export function isComcastOwned(text = '') {
+  const t = String(text).replace(/\s+/g, ' ');
+  return /\b(work(ing|s|ed)? with|already (have|use|using|talking|speaking|in touch)|been (working|talking|speaking)|our|we have an?)\b[^.?!]{0,60}\b(at|from|with)\s+comcast\b/i.test(t)
+    || /\bcomcast\b[^.?!]{0,25}\b(rep|representative|account (manager|executive|rep)|ae)\b[^.?!]{0,40}\b(already|currently|we|our)\b/i.test(t)
+    || /\b(our|we have an?|already have an?)\s+comcast\s+(rep|representative|account (manager|executive|rep)|ae|contact)\b/i.test(t);
+}
+
 // "I am only looking for price decreases, so send those over" (Brennan, 9 Nov): the classifier calls
 // it a no, but they asked for something.  A person decides; never Do Not Contact.
 export function asksForPricing(text = '') {
@@ -63,7 +73,10 @@ async function toEngaged(db, p, agentId, note) {
 // Returns a short note of what was done, or null when nothing was.
 export async function autoStopOnReply(db, { prospectId, agentId = null, receivedEmailId = null, sentiment, text = '', senderEmail = '' }) {
   if (!prospectId || !sentiment) return null;
-  if (sentiment !== 'negative' && !TO_ENGAGED.includes(sentiment)) return null;
+  // Not on interested replies: Jubilee Housing (Nov 2026) wanted a meeting AND mentioned their
+  // development team works with someone at Comcast.  Those go to Engaged for a person.
+  const comcastOwned = !['ooo', 'positive', 'meeting_request'].includes(sentiment) && isComcastOwned(text);
+  if (!comcastOwned && sentiment !== 'negative' && !TO_ENGAGED.includes(sentiment)) return null;
 
   // Our own agents and partners (Steven, Jared) are rows in agents: their notes are never a prospect's answer.
   if (senderEmail) {
@@ -75,6 +88,27 @@ export async function autoStopOnReply(db, { prospectId, agentId = null, received
   if (!p || OWNED.includes(p.status)) return null;
 
   const today = new Date().toISOString().slice(0, 10);
+
+  // Comcast already has this account: out of the cadence and Do Not Contact, whatever the sentiment.
+  // Never an Engaged conversation, though: a person is already handling that one.
+  if (comcastOwned && p.status !== 'engaged') {
+    await cancelEnrollments(db, p.id);
+    if (!GONE.includes(p.status)) {
+      await db.execute(`UPDATE prospects SET status='disqualified', updated_at=NOW() WHERE id=?`, [p.id]);
+      await db.execute('INSERT INTO pipeline_events (prospect_id, from_status, to_status, agent_id, notes) VALUES (?,?,?,?,?)',
+        [p.id, p.status, 'disqualified', agentId, 'Auto: already working with someone at Comcast - cadence stopped, Do Not Contact']);
+    }
+    for (const addr of [...new Set([p.email, senderEmail].filter(Boolean).map(e => e.toLowerCase()))]) {
+      const [x] = await db.execute('SELECT id FROM exclusion_list WHERE LOWER(email)=?', [addr]);
+      if (!x.length) await db.execute('INSERT INTO exclusion_list (email, company, reason) VALUES (?,?,?)',
+        [addr, p.company, `Auto: already working with someone at Comcast ${today}`]);
+    }
+    if (receivedEmailId) {
+      await db.execute(`UPDATE received_emails SET actioned=1, action_type='comcast_owned', actioned_at=NOW() WHERE id=?`, [receivedEmailId]);
+    }
+    return 'Comcast already owns the account: disqualified + Do Not Contact';
+  }
+  if (comcastOwned && sentiment !== 'negative' && !TO_ENGAGED.includes(sentiment)) return null;
 
   // Already removed: just make sure nothing is still queued for them.
   if (GONE.includes(p.status)) {
