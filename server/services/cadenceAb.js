@@ -6,7 +6,7 @@
 // The control version swaps a sentence for itself (no change).  {{partner}} in either text is the
 // partner's first name (Steven / Jared), so one test covers both agents.
 // Each prospect stays on one version for the life of a test; new prospects go to whichever version has
-// fewer sends, so the split stays even.  If the step's copy no longer contains find_text, nothing is swapped
+// fewer sends FOR THAT AGENT, so each agent's split stays even.  If the step's copy no longer contains find_text, nothing is swapped
 // and the send is not counted (copy changed under the test: the results page says so).
 //
 // The system never picks a winner on its own: results go to the Monday brief and /api/cadence-ab, and
@@ -62,8 +62,10 @@ export async function applyAb({ stepKey, agentId, prospectId, html, partnerName 
       'SELECT variant_id FROM cadence_ab_sends WHERE test_id = ? AND prospect_id = ? ORDER BY id LIMIT 1', [test.id, prospectId]);
     let v = prior && variants.find(x => x.id === prior.variant_id);
     if (!v) {
+      // Balance within each agent, not across the test: Kayla replies ~3x Megan, so an uneven
+      // agent mix would tilt the result (19 Nov 2026: Kayla 3 A / 0 B, Megan 6 A / 9 B).
       const [counts] = await pool.execute(
-        'SELECT variant_id, COUNT(*) n FROM cadence_ab_sends WHERE test_id = ? GROUP BY variant_id', [test.id]);
+        'SELECT variant_id, COUNT(*) n FROM cadence_ab_sends WHERE test_id = ? AND agent_id = ? GROUP BY variant_id', [test.id, agentId]);
       const n = id => Number((counts.find(c => c.variant_id === id) || {}).n || 0);
       v = [...variants].sort((a, b) => n(a.id) - n(b.id) || a.label.localeCompare(b.label))[0];
     }
